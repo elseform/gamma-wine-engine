@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "engineId": "cx26.3-w11-gamma001",
+  "versionLabel": "CX26.3.0-W11-Gamma001",
+  "base": {
+    "crossover": "26.3.0",
+    "wine": "11.0"
+  },
+  "hostArchitecture": "x86_64",
+  "windowsArchitectures": [
+    "i386",
+    "x86_64"
+  ],
+  "minimumSetupToolVersion": null,
+  "patches": [
+    "a6-final-same-view-backing-sync.patch",
+    "wine-11.1-rtlwalkframechain-null-function.patch",
+    "cyder-ntdll-frame-walk-page-fault-guard.patch",
+    "cyder-wineserver-sock-reselect-pseudo-fd.patch",
+    "cyder-wineserver-poll-slot-guard.patch",
+    "cyder-wineserver-exit-diagnostics.patch",
+    "cyder-wineserver-fd-reselect-async-null-ops.patch",
+    "cyder-wineserver-sock-rebind-async-fd.patch",
+    "cyder-wineserver-async-terminate-null-fd.patch",
+    "cyder-wineserver-free-async-queue-null-fd.patch",
+    "cyder-wineserver-pipe-end-disconnect-null-fd.patch",
+    "cyder-wineserver-add-completion-guard.patch",
+    "cyder-ntdll-qdo-optnone-NtQueryDirectoryObject.patch",
+    "gamma-ntdll-flush-write-buffers-sync.patch"
+  ],
+  "components": [
+    "runtime/cxcompatdb/cxcompatdb.c"
+  ],
+  "notes": "gamma-wine-engine provides a standalone Wine 11.0 / CX26 engine with Apple D3DMetal (GPTK 4.0b1) and DXMT. Generic wineserver/ntdll guards and Rosetta-safe memory barriers are preserved while all game-specific hacks (such as MapleStory wait handoff) are removed."
+}

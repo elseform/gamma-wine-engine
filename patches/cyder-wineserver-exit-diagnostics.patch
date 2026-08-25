@@ -1,0 +1,347 @@
+--- a/server/fd.c
++++ b/server/fd.c
+@@ -1001,9 +1001,13 @@
+             }
+         }
+     }
++    wineserver_diag_printf( "wineserver: main_loop exiting active_users=%d nb_users=%d\n",
++                            active_users, nb_users );
++    wineserver_log_exit_state();
+ }
+ 
+ 
++
+ /****************************************************************/
+ /* device functions */
+ 
+@@ -1671,8 +1675,11 @@
+         static int reported;
+ 
+         if (reported++ < 10)
+-            fprintf( stderr, "wineserver: set_fd_events: stale poll slot %d for fd %p"
+-                     " (unix_fd=%d user=%p events=%d)\n", user, fd, fd->unix_fd, fd->user, events );
++        {
++            wineserver_diag_printf( "wineserver: FATAL: set_fd_events: stale poll slot %d for fd %p"
++                                    " (unix_fd=%d user=%p events=%d)\n",
++                                    user, fd, fd->unix_fd, fd->user, events );
++        }
+         return;
+     }
+ 
+--- a/server/signal.c
++++ b/server/signal.c
+@@ -22,12 +22,17 @@
+ 
+ #include <signal.h>
+ #include <stdio.h>
++#include <stdlib.h>
+ #include <sys/time.h>
+ #include <poll.h>
+ #ifdef HAVE_SYS_RESOURCE_H
+ #include <sys/resource.h>
+ #endif
+ #include <unistd.h>
++#include <execinfo.h>
++#ifdef __APPLE__
++# include <libproc.h>
++#endif
+ 
+ #include "file.h"
+ #include "object.h"
+@@ -183,6 +188,7 @@
+ static void sigterm_callback(void)
+ {
+     flush_registry();
++    wineserver_log_exit_state();
+     exit(1);
+ }
+ 
+@@ -192,21 +198,56 @@
+     shutdown_master_socket();
+ }
+ 
++
++/* Cyder: best-effort signal breadcrumbs (not strictly async-signal-safe,
++ * but do_sigsegv already used fprintf/abort). */
++static void wineserver_diag_sender_path( int pid, char *buf, size_t buflen )
++{
++    if (!buf || !buflen) return;
++    buf[0] = '\0';
++#ifdef __APPLE__
++    if (pid > 0)
++        proc_pidpath( pid, buf, buflen );
++#else
++    (void)pid;
++#endif
++}
++
++static void wineserver_diag_received_signal( int signum, const char *name, siginfo_t *si )
++{
++    char path[1024];
++    int pid = si ? (int)si->si_pid : -1;
++    int uid = si ? (int)si->si_uid : -1;
++
++    wineserver_diag_sender_path( pid, path, sizeof(path) );
++    if (path[0])
++        wineserver_diag_printf( "wineserver: received signal %d (%s) from pid %d uid %d path=%s\n",
++                                signum, name, pid, uid, path );
++    else
++        wineserver_diag_printf( "wineserver: received signal %d (%s) from pid %d uid %d\n",
++                                signum, name, pid, uid );
++}
++
+ /* SIGHUP handler */
+-static void do_sighup( int signum )
++static void do_sighup( int signum, siginfo_t *si, void *context )
+ {
++    wineserver_diag_received_signal( signum, "SIGHUP", si );
+     do_signal( handler_sighup );
+ }
+ 
+-/* SIGTERM handler */
+-static void do_sigterm( int signum )
++/* SIGTERM / SIGQUIT handler */
++static void do_sigterm( int signum, siginfo_t *si, void *context )
+ {
++    wineserver_diag_received_signal( signum, signum == SIGQUIT ? "SIGQUIT" : "SIGTERM", si );
++    wineserver_log_exit_state();
+     do_signal( handler_sigterm );
+ }
+ 
+ /* SIGINT handler */
+-static void do_sigint( int signum )
++static void do_sigint( int signum, siginfo_t *si, void *context )
+ {
++    wineserver_diag_received_signal( signum, "SIGINT", si );
++    wineserver_log_exit_state();
+     do_signal( handler_sigint );
+ }
+ 
+@@ -222,10 +263,33 @@
+     do_signal( handler_sigchld );
+ }
+ 
+-/* SIGSEGV handler */
+-static void do_sigsegv( int signum )
++/* SIGSEGV/SIGBUS handler — Cyder: always log fault + backtrace before abort.
++ * Installed unconditionally so cores-enabled RLIMIT_CORE cannot silence us. */
++static void do_sigsegv( int signum, siginfo_t *si, void *context )
+ {
+-    fprintf( stderr, "wineserver crashed, please enable coredumps (ulimit -c unlimited) and restart.\n");
++    void *stack[64];
++    int n, i;
++    char **syms;
++    const char *name = (signum == SIGBUS) ? "SIGBUS" : "SIGSEGV";
++
++    (void)context;
++    wineserver_diag_printf( "wineserver: %s pid=%d si_addr=%p si_code=%d\n",
++                            name, (int)getpid(),
++                            si ? si->si_addr : NULL,
++                            si ? si->si_code : -1 );
++    wineserver_log_exit_state();
++    n = backtrace( stack, (int)(sizeof(stack) / sizeof(stack[0])) );
++    for (i = 0; i < n; i++)
++        wineserver_diag_printf( "wineserver: %s frame[%d]=%p\n", name, i, stack[i] );
++    syms = backtrace_symbols( stack, n );
++    if (syms)
++    {
++        for (i = 0; i < n; i++)
++            wineserver_diag_printf( "wineserver: %s sym[%d]=%s\n", name, i, syms[i] );
++        free( syms );
++    }
++    wineserver_diag_printf( "wineserver crashed (%s); coredumps may still help (ulimit -c unlimited).\n",
++                            name );
+     abort();
+ }
+ 
+@@ -255,17 +319,6 @@
+     return watchdog != 0;
+ }
+ 
+-static int core_dump_disabled( void )
+-{
+-    int r = 0;
+-#ifdef RLIMIT_CORE
+-    struct rlimit lim;
+-
+-    r = !getrlimit(RLIMIT_CORE, &lim) && (lim.rlim_cur == 0);
+-#endif
+-    return r;
+-}
+-
+ void init_signals(void)
+ {
+     struct sigaction action;
+@@ -296,20 +349,24 @@
+ #ifdef SIG_PTHREAD_CANCEL
+     sigaction( SIG_PTHREAD_CANCEL, &action, NULL );
+ #endif
+-    action.sa_handler = do_sighup;
++    action.sa_flags = SA_SIGINFO;
++    action.sa_sigaction = do_sighup;
+     sigaction( SIGHUP, &action, NULL );
+-    action.sa_handler = do_sigint;
++    action.sa_sigaction = do_sigint;
+     sigaction( SIGINT, &action, NULL );
++    action.sa_flags = 0;
+     action.sa_handler = do_sigalrm;
+     sigaction( SIGALRM, &action, NULL );
+-    action.sa_handler = do_sigterm;
++    action.sa_flags = SA_SIGINFO;
++    action.sa_sigaction = do_sigterm;
+     sigaction( SIGQUIT, &action, NULL );
+     sigaction( SIGTERM, &action, NULL );
+-    if (core_dump_disabled())
+-    {
+-        action.sa_handler = do_sigsegv;
+-        sigaction( SIGSEGV, &action, NULL );
+-    }
++    /* Always install SEGV/BUS diagnostics (do not gate on core_dump_disabled). */
++    action.sa_flags = SA_SIGINFO;
++    action.sa_sigaction = do_sigsegv;
++    sigaction( SIGSEGV, &action, NULL );
++    sigaction( SIGBUS, &action, NULL );
++    action.sa_flags = 0;
+     action.sa_handler = SIG_IGN;
+     sigaction( SIGXFSZ, &action, NULL );
+ #ifdef HAVE_SIGINFO_T_SI_FD
+--- a/server/main.c
++++ b/server/main.c
+@@ -36,6 +36,7 @@
+ #endif
+ 
+ #include "object.h"
++#include "process.h"
+ #include "file.h"
+ #include "thread.h"
+ #include "request.h"
+@@ -214,8 +215,11 @@
+     exit(1);
+ }
+ 
+-static void sigterm_handler( int signum )
++static void sigterm_handler( int signum, siginfo_t *si, void *context )
+ {
++    /* Temporary handlers installed before init_signals(). */
++    wineserver_diag_printf( "wineserver: early signal %d from pid %d uid %d\n",
++                            signum, si ? (int)si->si_pid : -1, si ? (int)si->si_uid : -1 );
+     exit(1);  /* make sure atexit functions get called */
+ }
+ 
+@@ -240,6 +244,11 @@
+ #endif
+     }
+ #endif
++}
++
++static void wineserver_atexit_diag(void)
++{
++    wineserver_diag_printf( "wineserver: atexit pid=%d\n", (int)getpid() );
+ }
+ 
+ int main( int argc, char *argv[] )
+@@ -249,12 +258,18 @@
+     parse_options( argc, argv, "d::fhk::p::vw", long_options, option_callback );
+ 
+     /* setup temporary handlers before the real signal initialization is done */
+-    signal( SIGPIPE, SIG_IGN );
+-    signal( SIGHUP, sigterm_handler );
+-    signal( SIGINT, sigterm_handler );
+-    signal( SIGQUIT, sigterm_handler );
+-    signal( SIGTERM, sigterm_handler );
+-    signal( SIGABRT, sigterm_handler );
++    {
++        struct sigaction early;
++        sigemptyset( &early.sa_mask );
++        early.sa_flags = SA_SIGINFO;
++        early.sa_sigaction = sigterm_handler;
++        signal( SIGPIPE, SIG_IGN );
++        sigaction( SIGHUP, &early, NULL );
++        sigaction( SIGINT, &early, NULL );
++        sigaction( SIGQUIT, &early, NULL );
++        sigaction( SIGTERM, &early, NULL );
++        sigaction( SIGABRT, &early, NULL );
++    }
+     init_limits();
+ 
+     sock_init();
+@@ -263,6 +278,8 @@
+     msync_init();
+ 
+     if (debug_level) fprintf( stderr, "wineserver: starting (pid=%ld)\n", (long) getpid() );
++    wineserver_diag_printf( "wineserver: diag start pid=%d\n", (int)getpid() );
++    atexit( wineserver_atexit_diag );
+     set_current_time();
+     init_signals();
+     init_memory();
+@@ -270,5 +287,7 @@
+     init_threading();
+     init_registry();
+     main_loop();
++    wineserver_diag_printf( "wineserver: main_loop returned\n" );
++    wineserver_log_exit_state();
+     return 0;
+ }
+--- a/server/process.c
++++ b/server/process.c
+@@ -73,6 +73,47 @@
+ static struct timeout_user *shutdown_timeout;  /* timeout for server shutdown */
+ static int shutdown_stage;  /* current stage in the shutdown process */
+ 
++/* Cyder: dual-write diagnostics to stderr and $WINEPREFIX/cyder-wineserver-diag.log
++ * so a killed gzip capture pipe cannot erase the only copy of the death reason. */
++void wineserver_diag_printf( const char *fmt, ... )
++{
++    va_list ap, ap2;
++    int fd = -1;
++
++    va_start( ap, fmt );
++    va_copy( ap2, ap );
++    vfprintf( stderr, fmt, ap );
++    fflush( stderr );
++    va_end( ap );
++
++    if (config_dir_fd != -1)
++        fd = openat( config_dir_fd, "cyder-wineserver-diag.log",
++                     O_WRONLY | O_CREAT | O_APPEND, 0600 );
++    if (fd == -1)
++    {
++        const char *prefix = getenv( "WINEPREFIX" );
++        char path[PATH_MAX];
++        if (prefix && snprintf( path, sizeof(path), "%s/cyder-wineserver-diag.log",
++                                prefix ) < (int)sizeof(path))
++            fd = open( path, O_WRONLY | O_CREAT | O_APPEND, 0600 );
++    }
++    if (fd != -1)
++    {
++        vdprintf( fd, fmt, ap2 );
++        fsync( fd );
++        close( fd );
++    }
++    va_end( ap2 );
++}
++
++void wineserver_log_exit_state(void)
++{
++    wineserver_diag_printf( "wineserver: exit state running_processes=%d user_processes=%d"
++                            " shutdown_stage=%d\n",
++                            running_processes, user_processes, shutdown_stage );
++}
++
++
+ static const WCHAR process_name[] = {'P','r','o','c','e','s','s'};
+ 
+ struct type_descr process_type =
+--- a/server/process.h
++++ b/server/process.h
+@@ -133,6 +133,10 @@
+ #define USE_PTRACE
+ #endif
+ 
++/* Cyder diagnostic: dump process counters when wineserver is exiting. */
++extern void wineserver_diag_printf( const char *fmt, ... );
++extern void wineserver_log_exit_state(void);
++
+ extern void init_tracing_mechanism(void);
+ extern void init_process_tracing( struct process *process );
+ extern void finish_process_tracing( struct process *process );
