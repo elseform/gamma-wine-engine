@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 WINE_INSTALL="${1:-$REPO_ROOT/install/wine-cx26-x86_64}"
 DXMT_SRC="${DXMT_SRC:-$REPO_ROOT/sources/dxmt}"
@@ -32,6 +32,13 @@ if [[ -d "$DXMT_SRC" ]]; then
 
   if [[ -d "$DXMT_SRC/x86_64-windows" ]]; then
     cp -R "$DXMT_SRC/x86_64-windows/"* "$WINE_INSTALL/lib/dxmt/x86_64-windows/"
+    # Critical Fix: Copy winemetal.dll directly to lib/wine/x86_64-windows
+    # so that `wineboot -u` creates the fake DLL for it in system32,
+    # avoiding STATUS_DLL_NOT_FOUND during NTDLL PE load phase.
+    if [[ -f "$DXMT_SRC/x86_64-windows/winemetal.dll" ]]; then
+      cp "$DXMT_SRC/x86_64-windows/winemetal.dll" "$WINE_INSTALL/lib/wine/x86_64-windows/"
+      echo "  Copied winemetal.dll to lib/wine (fixes CX26 ntdll PE loader)"
+    fi
     echo "  Staged DXMT x86_64 DLLs in lib/dxmt/x86_64-windows/"
   fi
 
@@ -39,6 +46,9 @@ if [[ -d "$DXMT_SRC" ]]; then
     cp -R "$DXMT_SRC/i386-windows/"* "$WINE_INSTALL/lib/dxmt/i386-windows/"
     if [[ -d "$WINE_INSTALL/lib/wine/i386-windows" ]]; then
       cp -R "$DXMT_SRC/i386-windows/"* "$WINE_INSTALL/lib/wine/i386-windows/"
+      if [[ -f "$DXMT_SRC/i386-windows/winemetal.dll" ]]; then
+        cp "$DXMT_SRC/i386-windows/winemetal.dll" "$WINE_INSTALL/lib/wine/i386-windows/"
+      fi
     fi
     echo "  Staged DXMT i386 DLLs"
   fi

@@ -10,6 +10,7 @@ EXE_PATH="G:\\3dss5\\bin\\AnomalyDX11AVX.exe"
 
 # 1. Prefix & Engine Environment
 export WINEPREFIX="${WINEPREFIX:-$PREFIX}"
+
 export WINEMSYNC="${WINEMSYNC:-1}"
 export WINEESYNC="${WINEESYNC:-1}"
 export ROSETTA_ADVERTISE_AVX="${ROSETTA_ADVERTISE_AVX:-1}"

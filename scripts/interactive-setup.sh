@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# Interactive setup: extract engine tar.xz, bootstrap Wine prefix, build .app bundle.
+# Interactive setup: builds a fully self-contained .app bundle — engine and
+# Wine prefix both live inside Contents/Resources/, nothing external needed.
 # Standalone — does not call other scripts in this repo.
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 prompt_path() {
   local message="$1" default="$2" reply
@@ -10,34 +13,47 @@ prompt_path() {
 }
 
 echo "=========================================================="
-echo "GAMMA Wine Engine — Interactive Setup"
+echo "GAMMA Wine Engine — Interactive Setup (self-contained .app)"
 echo "=========================================================="
 
 # 1. Collect paths
 while true; do
-  ARTIFACT_PATH="$(prompt_path "Path to engine tar.xz" "$PWD/dist/artifacts/CX26-3W11-Gamma0-1.tar.xz")"
+  ARTIFACT_PATH="$(prompt_path "Path to engine tar.xz" "$SCRIPT_DIR/dist/artifacts/CX26-3-0-W11-Gamma002.tar.xz")"
   ARTIFACT_PATH="${ARTIFACT_PATH/#\~/$HOME}"
   [[ -f "$ARTIFACT_PATH" ]] && break
   echo "  Not found: $ARTIFACT_PATH"
 done
 
-ENGINE_DIR="$(prompt_path "Target path for engine" "$HOME/Applications/gamma-wine")"
-ENGINE_DIR="${ENGINE_DIR/#\~/$HOME}"
+APP_NAME="$(prompt_path "Name for the .app bundle (without .app)" "GAMMA")"
+APP_NAME="${APP_NAME%.app}"
 
-WINEPREFIX="$(prompt_path "Wine prefix path" "$HOME/Library/Application Support/gamma-test-prefix")"
-WINEPREFIX="${WINEPREFIX/#\~/$HOME}"
-
-APP_PATH="$(prompt_path "Path for the .app bundle" "$HOME/Applications/S.T.A.L.K.E.R. Anomaly.app")"
-APP_PATH="${APP_PATH/#\~/$HOME}"
+APP_DIR_PARENT="$(prompt_path "Directory to place the .app in" "$HOME/Applications")"
+APP_DIR_PARENT="${APP_DIR_PARENT/#\~/$HOME}"
+APP_PATH="$APP_DIR_PARENT/$APP_NAME.app"
 
 GAMMA_ROOT="$(prompt_path "Path to game root (G: drive)" "$HOME/gamma")"
 GAMMA_ROOT="${GAMMA_ROOT/#\~/$HOME}"
 
+while true; do
+  EXE_REL_PATH="$(prompt_path "Path to .exe, relative to game root" "3dss5/bin/AnomalyDX11AVX.exe")"
+  EXE_REL_PATH="${EXE_REL_PATH#/}"
+  [[ -f "$GAMMA_ROOT/$EXE_REL_PATH" ]] && break
+  echo "  Not found: $GAMMA_ROOT/$EXE_REL_PATH"
+  read -r -p "  Use anyway? [y/N]: " force || true
+  [[ "${force:-N}" =~ ^[Yy] ]] && break
+done
+EXE_WIN_PATH="G:\\${EXE_REL_PATH//\//\\}"
+EXE_RUN_DIR="$GAMMA_ROOT/$(dirname "$EXE_REL_PATH")"
+
+# Engine and prefix now live inside the app bundle
+ENGINE_DIR="$APP_PATH/Contents/Resources/engine"
+WINEPREFIX="$APP_PATH/Contents/Resources/prefix"
+
 echo ""
 echo "  Engine tar.xz:  $ARTIFACT_PATH"
-echo "  Engine target:  $ENGINE_DIR"
-echo "  Wine prefix:    $WINEPREFIX"
 echo "  App bundle:     $APP_PATH"
+echo "  Engine (in app): $ENGINE_DIR"
+echo "  Prefix (in app): $WINEPREFIX"
 echo "  Game root:      $GAMMA_ROOT"
 echo ""
 read -r -p "Proceed? [Y/n]: " confirm || true
@@ -46,9 +62,11 @@ if [[ "${confirm:-Y}" =~ ^[Nn] ]]; then
   exit 1
 fi
 
-# 2. Extract engine
+# 2. Create app skeleton, extract engine
 echo ""
-echo "==> Step 1: Extracting Wine engine..."
+echo "==> Step 1: Extracting Wine engine into app bundle..."
+mkdir -p "$APP_PATH/Contents/MacOS"
+mkdir -p "$APP_PATH/Contents/Resources"
 mkdir -p "$ENGINE_DIR"
 tar -xf "$ARTIFACT_PATH" -C "$ENGINE_DIR" --strip-components=1
 
@@ -111,11 +129,9 @@ WINE="$ENGINE_DIR/bin/wine" WINESERVER="$ENGINE_DIR/bin/wineserver" WINEPREFIX="
 
 WINEPREFIX="$WINEPREFIX" arch -x86_64 "$ENGINE_DIR/bin/wineserver" -w
 
-# 4. Create .app bundle
+# 4. Finish .app bundle (Info.plist, app.env, launcher)
 echo ""
-echo "==> Step 3: Creating .app bundle..."
-mkdir -p "$APP_PATH/Contents/MacOS"
-mkdir -p "$APP_PATH/Contents/Resources"
+echo "==> Step 3: Writing .app bundle metadata & launcher..."
 
 cat > "$APP_PATH/Contents/Info.plist" << EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -125,7 +141,7 @@ cat > "$APP_PATH/Contents/Info.plist" << EOF
 	<key>CFBundleDevelopmentRegion</key>
 	<string>English</string>
 	<key>CFBundleDisplayName</key>
-	<string>S.T.A.L.K.E.R. Anomaly</string>
+	<string>$APP_NAME</string>
 	<key>CFBundleExecutable</key>
 	<string>launcher</string>
 	<key>CFBundleIconFile</key>
@@ -135,7 +151,7 @@ cat > "$APP_PATH/Contents/Info.plist" << EOF
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>1.0</string>
 	<key>CFBundleName</key>
-	<string>S.T.A.L.K.E.R. Anomaly</string>
+	<string>$APP_NAME</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -154,51 +170,52 @@ cat > "$APP_PATH/Contents/Info.plist" << EOF
 </plist>
 EOF
 
+# app.env only carries toggles now — engine/prefix paths are resolved by the
+# launcher relative to its own location, so the bundle stays relocatable.
 cat > "$APP_PATH/Contents/Resources/app.env" << EOF
 # S.T.A.L.K.E.R. Anomaly App Runtime Configuration
 # Edit this file anytime to toggle settings directly!
 
-export WINE_DIR="$ENGINE_DIR"
-export WINEPREFIX="$WINEPREFIX"
 export MTL_HUD_ENABLED=1
 export WINEMSYNC=1
 export WINEESYNC=1
 export ROSETTA_ADVERTISE_AVX=1
 export WINEDEBUG="-all"
-export DEFAULT_GAME_ARGS="-dbg"
 EOF
 
-cat > "$APP_PATH/Contents/MacOS/launcher" << 'EOF'
+cat > "$APP_PATH/Contents/MacOS/launcher" << EOF
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
-RESOURCES_DIR="$APP_DIR/Contents/Resources"
+APP_DIR="\$(cd "\$(dirname "\$0")/../.." && pwd)"
+RESOURCES_DIR="\$APP_DIR/Contents/Resources"
 
-# Load embedded environment configuration
-if [[ -f "$RESOURCES_DIR/app.env" ]]; then
-  source "$RESOURCES_DIR/app.env"
+# Engine and prefix live inside the bundle itself
+ENGINE_DIR="\$RESOURCES_DIR/engine"
+export WINEPREFIX="\$RESOURCES_DIR/prefix"
+
+# Load embedded environment configuration (toggles only)
+if [[ -f "\$RESOURCES_DIR/app.env" ]]; then
+  source "\$RESOURCES_DIR/app.env"
 fi
 
-export WINEPREFIX="${WINEPREFIX:-$HOME/Library/Application Support/gamma-test-prefix}"
-export WINEMSYNC="${WINEMSYNC:-1}"
-export WINEESYNC="${WINEESYNC:-1}"
-export ROSETTA_ADVERTISE_AVX="${ROSETTA_ADVERTISE_AVX:-1}"
-export MTL_HUD_ENABLED="${MTL_HUD_ENABLED:-1}"
-export WINEDEBUG="${WINEDEBUG:--all}"
+export WINEMSYNC="\${WINEMSYNC:-1}"
+export WINEESYNC="\${WINEESYNC:-1}"
+export ROSETTA_ADVERTISE_AVX="\${ROSETTA_ADVERTISE_AVX:-1}"
+export MTL_HUD_ENABLED="\${MTL_HUD_ENABLED:-1}"
+export WINEDEBUG="\${WINEDEBUG:--all}"
 export WINEBOOT_HIDE_DIALOG=1
 export LC_ALL="en_US.UTF-8"
 export LANG="en_US.UTF-8"
 
-ENGINE_DIR="${WINE_DIR:-$HOME/Applications/gamma-wine}"
-EXE_PATH="G:\3dss5\bin\AnomalyDX11AVX.exe"
+EXE_PATH="$EXE_WIN_PATH"
 
 # Explicit D3DMetal Paths
-export CX_APPLEGPT_LIBD3DSHARED_PATH="$ENGINE_DIR/lib/external/libd3dshared.dylib"
-export CX_APPLEGPTK_LIBD3DSHARED_PATH="$ENGINE_DIR/lib/external/libd3dshared.dylib"
-export CX_D3DMETALPATH="$ENGINE_DIR/lib/external/D3DMetal.framework"
+export CX_APPLEGPT_LIBD3DSHARED_PATH="\$ENGINE_DIR/lib/external/libd3dshared.dylib"
+export CX_APPLEGPTK_LIBD3DSHARED_PATH="\$ENGINE_DIR/lib/external/libd3dshared.dylib"
+export CX_D3DMETALPATH="\$ENGINE_DIR/lib/external/D3DMetal.framework"
 
-cd "$HOME/gamma/3dss5/bin"
+cd "$EXE_RUN_DIR"
 
 # Bring window to frontmost focus for DirectInput capture
 (
@@ -206,23 +223,23 @@ cd "$HOME/gamma/3dss5/bin"
   osascript -e 'tell application "System Events" to set frontmost of (first process whose name contains "wine" or name contains "Anomaly") to true' 2>/dev/null || true
 ) &
 
-# Arguments to pass (bash 3.2 on macOS chokes on "${@}" under set -u when empty)
-if [[ $# -eq 0 && -n "${DEFAULT_GAME_ARGS:-}" ]]; then
+# Arguments to pass (bash 3.2 on macOS chokes on "\${@}" under set -u when empty)
+if [[ \$# -eq 0 && -n "\${DEFAULT_GAME_ARGS:-}" ]]; then
   # shellcheck disable=SC2086
-  set -- $DEFAULT_GAME_ARGS
+  set -- \$DEFAULT_GAME_ARGS
 fi
 
-exec taskpolicy -l 0 -t 0 arch -x86_64 "$ENGINE_DIR/bin/wine" "$EXE_PATH" "$@"
+exec taskpolicy -l 0 -t 0 arch -x86_64 "\$ENGINE_DIR/bin/wine" "\$EXE_PATH" "\$@"
 EOF
 
 chmod +x "$APP_PATH/Contents/MacOS/launcher"
 
 echo ""
 echo "=========================================================="
-echo "Setup complete."
-echo "  Engine:  $ENGINE_DIR"
-echo "  Prefix:  $WINEPREFIX"
+echo "Setup complete — fully self-contained bundle."
 echo "  App:     $APP_PATH"
+echo "  Engine:  $ENGINE_DIR  (inside app)"
+echo "  Prefix:  $WINEPREFIX  (inside app)"
 echo ""
 echo "Launch via:  open \"$APP_PATH\""
 echo "Or CLI:      \"$APP_PATH/Contents/MacOS/launcher\" -dbg -nointro"

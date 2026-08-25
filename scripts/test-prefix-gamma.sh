@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 WINE_DIR="${WINE_DIR:-$REPO_ROOT/install/wine-cx26-x86_64}"
 TEST_PREFIX="${TEST_PREFIX:-/tmp/test-gamma-prefix}"

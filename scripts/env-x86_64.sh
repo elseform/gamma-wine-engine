@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # OGOM is retained as a compatibility variable for the extracted build scripts;
 # in this standalone repository it resolves to the engine-project root.
 if [[ -z "${OGOM:-}" ]]; then
-  export OGOM="$(cd "$SCRIPT_DIR/.." && pwd)"
+  export OGOM="$(cd "$SCRIPT_DIR/../.." && pwd)"
 fi
 
 # Optional project .env (gitignored). Only KEY=VALUE lines; no shell expansion.

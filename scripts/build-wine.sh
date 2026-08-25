@@ -542,7 +542,7 @@ if [[ "$CONFIGURE_ONLY" -eq 0 ]]; then
       VULKAN_MODE="$VULKAN_MODE" VULKAN_SOURCE="$VULKAN_SOURCE" \
       "$SCRIPT_DIR/bundle-wine-dylibs.sh" "$WINE_INSTALL"
   fi
-  ENGINE_VERSION_LABEL="$(head -n 1 "$SCRIPT_DIR/../config/engine-version.txt" 2>/dev/null || true)"
+  ENGINE_VERSION_LABEL="$(head -n 1 "$SCRIPT_DIR/../../config/engine-version.txt" 2>/dev/null || true)"
   if [[ -n "$ENGINE_VERSION_LABEL" ]]; then
     printf '%s\n' "$ENGINE_VERSION_LABEL" >"$WINE_INSTALL/version"
     echo "Wrote engine version: $WINE_INSTALL/version"
