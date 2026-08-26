@@ -2,22 +2,22 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/env-x86_64.sh"
 
 WINE_SRC="${WINE_SRC:-$ROOT/build/cx26/sources/wine}"
 WINE_INSTALL="${WINE_INSTALL:-$ROOT/install/wine-cx26-x86_64}"
 SOURCE="$ROOT/runtime/cxcompatdb/cxcompatdb.c"
-OUTPUT="${CYDER_CXCOMPATDB_OUTPUT:-$WINE_INSTALL/lib/wine/x86_64-unix/cxcompatdb.so}"
+OUTPUT="${GAMMA_CXCOMPATDB_OUTPUT:-$WINE_INSTALL/lib/wine/x86_64-unix/cxcompatdb.so}"
 TARGET="${MACOSX_DEPLOYMENT_TARGET:-10.15}"
-CONFIG_DIR="${CYDER_CXCOMPATDB_CONFIG_DIR:-$WINE_SRC/build64/include}"
+CONFIG_DIR="${GAMMA_CXCOMPATDB_CONFIG_DIR:-$WINE_SRC/build64/include}"
 
 # OEM source snapshots are distributed without a configured build64 tree. The
 # standalone plugin only needs Wine's public headers and the config include
 # guard, so the OEM repack flow supplies a config.h copied from config.h.in.
 [[ -f "$CONFIG_DIR/config.h" ]] || {
   echo "Missing cxcompatdb config header: $CONFIG_DIR/config.h" >&2
-  echo "Set CYDER_CXCOMPATDB_CONFIG_DIR to a configured Wine include directory." >&2
+  echo "Set GAMMA_CXCOMPATDB_CONFIG_DIR to a configured Wine include directory." >&2
   exit 1
 }
 
@@ -33,9 +33,9 @@ clang_args=(
   -mmacosx-version-min="$TARGET"
   -DWINE_UNIX_LIB
 )
-if [[ -n "${CYDER_CXCOMPATDB_EXTRA_CFLAGS:-}" ]]; then
+if [[ -n "${GAMMA_CXCOMPATDB_EXTRA_CFLAGS:-}" ]]; then
   extra_cflags=()
-  read -r -a extra_cflags <<<"$CYDER_CXCOMPATDB_EXTRA_CFLAGS"
+  read -r -a extra_cflags <<<"$GAMMA_CXCOMPATDB_EXTRA_CFLAGS"
   clang_args+=("${extra_cflags[@]}")
 fi
 clang_args+=(
@@ -45,5 +45,5 @@ clang_args+=(
 )
 arch -x86_64 /usr/bin/clang "${clang_args[@]}" -o "$OUTPUT" "$SOURCE"
 
-echo "Built Cyder cxcompatdb: $OUTPUT"
+echo "Built cxcompatdb: $OUTPUT"
 otool -l "$OUTPUT" | awk '/minos/{print "  " $0; exit}'

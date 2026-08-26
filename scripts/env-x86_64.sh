@@ -5,12 +5,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # OGOM is retained as a compatibility variable for the extracted build scripts;
 # in this standalone repository it resolves to the engine-project root.
 if [[ -z "${OGOM:-}" ]]; then
-  export OGOM="$(cd "$SCRIPT_DIR/../.." && pwd)"
+  export OGOM="$(cd "$SCRIPT_DIR/.." && pwd)"
 fi
 
 # Optional project .env (gitignored). Only KEY=VALUE lines; no shell expansion.
-# Recognized: MACOSX_DEPLOYMENT_TARGET, CYDER_MIN_OS (alias for the former).
-_cyder_load_dotenv() {
+# Recognized: MACOSX_DEPLOYMENT_TARGET, GAMMA_MIN_OS / CYDER_MIN_OS (aliases).
+_gamma_load_dotenv() {
   local env_file="$OGOM/.env"
   local line key value
   [[ -f "$env_file" ]] || return 0
@@ -30,7 +30,7 @@ _cyder_load_dotenv() {
     value="${value%\'}"
     value="${value#\'}"
     case "$key" in
-      MACOSX_DEPLOYMENT_TARGET | CYDER_MIN_OS)
+      MACOSX_DEPLOYMENT_TARGET | GAMMA_MIN_OS | CYDER_MIN_OS)
         [[ "$value" =~ ^[0-9]+(\.[0-9]+)*$ ]] || {
           echo "Ignoring invalid $key in $env_file: $value" >&2
           continue
@@ -43,8 +43,8 @@ _cyder_load_dotenv() {
     esac
   done <"$env_file"
 }
-_cyder_load_dotenv
-unset -f _cyder_load_dotenv
+_gamma_load_dotenv
+unset -f _gamma_load_dotenv
 
 export CX_VERSION="${CX_VERSION:-26}"
 # Project-local x86_64 Homebrew. Ignore shell profile HOMEBREW_PREFIX=/opt/homebrew
@@ -108,6 +108,32 @@ case "$MOLTENVK_SOURCE" in
     ;;
 esac
 export VKD3D_SRC="${VKD3D_SRC:-$BUILD_DIR/cx${CX_VERSION}/sources/vkd3d}"
+
+# Local CrossOver.app install, used as a source of prebuilt x86_64 assets:
+#   lib64/libMoltenVK.dylib  -> --vulkan-source crossover
+#   lib/dxvk/                -> DXVK graphics backend
+# Set CROSSOVER_APP to override; empty when no install is found.
+if [[ -z "${CROSSOVER_APP:-}" ]]; then
+  for _cx_app in \
+    "$HOME/Applications/CrossOver.app" \
+    "/Applications/CrossOver.app"; do
+    if [[ -d "$_cx_app/Contents/SharedSupport/CrossOver" ]]; then
+      CROSSOVER_APP="$_cx_app"
+      break
+    fi
+  done
+  unset _cx_app
+fi
+export CROSSOVER_APP="${CROSSOVER_APP:-}"
+if [[ -n "$CROSSOVER_APP" ]]; then
+  export CROSSOVER_SHARED="$CROSSOVER_APP/Contents/SharedSupport/CrossOver"
+  export CROSSOVER_MOLTENVK="${CROSSOVER_MOLTENVK:-$CROSSOVER_SHARED/lib64/libMoltenVK.dylib}"
+  export CROSSOVER_DXVK="${CROSSOVER_DXVK:-$CROSSOVER_SHARED/lib/dxvk}"
+else
+  export CROSSOVER_SHARED=""
+  export CROSSOVER_MOLTENVK="${CROSSOVER_MOLTENVK:-}"
+  export CROSSOVER_DXVK="${CROSSOVER_DXVK:-}"
+fi
 
 export BLUECG_PREFIX="${BLUECG_PREFIX:-$OGOM/BlueCrossgateNew}"
 export ENTITLEMENTS_PLIST="${ENTITLEMENTS_PLIST:-$OGOM/config/entitlements.plist}"

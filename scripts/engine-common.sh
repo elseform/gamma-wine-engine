@@ -4,15 +4,15 @@ set -euo pipefail
 ENGINE_COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENGINE_PROJECT_ROOT="$(cd "$ENGINE_COMMON_DIR/.." && pwd)"
 
-cyder_engine_artifacts_dir() {
+gamma_engine_artifacts_dir() {
   printf '%s\n' "${GAMMA_ENGINE_ARTIFACTS_DIR:-${CYDER_ENGINE_ARTIFACTS_DIR:-$ENGINE_PROJECT_ROOT/dist/artifacts}}"
 }
 
-cyder_crossover_version() {
+gamma_crossover_version() {
   printf '%s\n' "${GAMMA_CROSSOVER_VERSION:-${CYDER_CROSSOVER_VERSION:-26.3.0}}"
 }
 
-cyder_engine_version_label_trim() {
+gamma_engine_version_label_trim() {
   local ver="$1"
   ver="${ver//$'\r'/}"
   ver="${ver#"${ver%%[![:space:]]*}"}"
@@ -20,12 +20,12 @@ cyder_engine_version_label_trim() {
   printf '%s\n' "$ver"
 }
 
-cyder_format_engine_version_from_wine() {
+gamma_format_engine_version_from_wine() {
   local wine_bin="${1:-}"
   local wine_raw wine_ver cx_ver
   local version_label="${GAMMA_ENGINE_VERSION_LABEL:-${CYDER_ENGINE_VERSION_LABEL:-}}"
   if [[ -n "$version_label" ]]; then
-    cyder_engine_version_label_trim "$version_label"
+    gamma_engine_version_label_trim "$version_label"
     return 0
   fi
   if [[ -z "$wine_bin" && -n "${WINE_INSTALL:-}" ]]; then
@@ -34,18 +34,18 @@ cyder_format_engine_version_from_wine() {
   [[ -x "$wine_bin" ]] || return 1
   wine_raw="$(arch -x86_64 "$wine_bin" --version 2>/dev/null || true)"
   wine_ver="${wine_raw#wine-}"
-  cx_ver="$(cyder_crossover_version)"
+  cx_ver="$(gamma_crossover_version)"
   printf 'wine crossover %s (wine %s)\n' "$cx_ver" "$wine_ver"
 }
 
-cyder_detect_engine_version_label() {
-  cyder_format_engine_version_from_wine "${1:-}"
+gamma_detect_engine_version_label() {
+  gamma_format_engine_version_from_wine "${1:-}"
 }
 
-cyder_engine_version_slug_from_label() {
+gamma_engine_version_slug_from_label() {
   local label="$1"
   local slug cx wine_ver tail
-  label="$(cyder_engine_version_label_trim "$label")"
+  label="$(gamma_engine_version_label_trim "$label")"
   if [[ "$label" == wine\ crossover\ * ]]; then
     cx="${label#wine crossover }"
     cx="${cx%% (wine *)}"
@@ -75,47 +75,67 @@ cyder_engine_version_slug_from_label() {
   printf '%s\n' "$slug"
 }
 
-cyder_engine_versions_equal() {
+gamma_engine_versions_equal() {
   local left right left_slug right_slug
-  left="$(cyder_engine_version_label_trim "${1:-}")"
-  right="$(cyder_engine_version_label_trim "${2:-}")"
+  left="$(gamma_engine_version_label_trim "${1:-}")"
+  right="$(gamma_engine_version_label_trim "${2:-}")"
   [[ -n "$left" && -n "$right" ]] || return 1
   [[ "$left" == "$right" ]] && return 0
-  left_slug="$(cyder_engine_version_slug_from_label "$left")"
-  right_slug="$(cyder_engine_version_slug_from_label "$right")"
+  left_slug="$(gamma_engine_version_slug_from_label "$left")"
+  right_slug="$(gamma_engine_version_slug_from_label "$right")"
   [[ "$left_slug" == "$right" || "$left" == "$right_slug" || "$left_slug" == "$right_slug" ]]
 }
 
-cyder_read_engine_version_file() {
+gamma_read_engine_version_file() {
   local engine_root="$1"
   local ver
   [[ -f "$engine_root/version" ]] || return 1
-  ver="$(cyder_engine_version_label_trim "$(cat "$engine_root/version")")"
+  ver="$(gamma_engine_version_label_trim "$(cat "$engine_root/version")")"
   [[ -n "$ver" ]] || return 1
   printf '%s\n' "$ver"
 }
 
-cyder_write_engine_version_file() {
+gamma_write_engine_version_file() {
   local engine_root="$1"
   local ver="$2"
-  ver="$(cyder_engine_version_label_trim "$ver")"
+  ver="$(gamma_engine_version_label_trim "$ver")"
   [[ -n "$ver" ]] || return 1
   printf '%s\n' "$ver" >"$engine_root/version"
 }
 
-cyder_engine_version_from_tarball() {
+gamma_engine_version_from_tarball() {
   local tarball="$1"
   local ver
   ver="$(tar -xOf "$tarball" wswine.bundle/version 2>/dev/null | head -1 || true)"
-  ver="$(cyder_engine_version_label_trim "$ver")"
+  ver="$(gamma_engine_version_label_trim "$ver")"
   [[ -n "$ver" ]] || return 1
   printf '%s\n' "$ver"
 }
 
-cyder_engine_archive_path_for_format() {
+# Explicit artifact basename (no extension). Order of precedence:
+#   GAMMA_ENGINE_ARTIFACT_BASENAME -> artifactBasename in engine-release.json
+#   -> empty, meaning "fall back to the version-derived name".
+gamma_engine_artifact_basename() {
+  local config="${GAMMA_ENGINE_RELEASE_CONFIG:-${CYDER_ENGINE_RELEASE_CONFIG:-$ENGINE_PROJECT_ROOT/config/engine-release.json}}"
+  local name="${GAMMA_ENGINE_ARTIFACT_BASENAME:-}"
+  if [[ -z "$name" && -f "$config" ]]; then
+    name="$(sed -n 's/.*"artifactBasename"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$config" | head -n 1)"
+  fi
+  printf '%s\n' "$name"
+}
+
+gamma_engine_archive_path_for_format() {
   local ver="$1"
-  local dir="${2:-$(cyder_engine_artifacts_dir)}"
+  local dir="${2:-$(gamma_engine_artifacts_dir)}"
   local format="${3:-xz}"
+  local base
+  base="$(gamma_engine_artifact_basename)"
+  if [[ -n "$base" ]]; then
+    case "$format" in
+      zst | zstd) printf '%s/%s.tar.zst\n' "$dir" "$base" ; return 0 ;;
+      xz) printf '%s/%s.tar.xz\n' "$dir" "$base" ; return 0 ;;
+    esac
+  fi
   case "$format" in
     zst | zstd) printf '%s/engine-%s.tar.zst\n' "$dir" "$ver" ;;
     xz) printf '%s/gamma-wine-x86_64-%s.tar.xz\n' "$dir" "$ver" ;;
@@ -126,10 +146,10 @@ cyder_engine_archive_path_for_format() {
   esac
 }
 
-cyder_find_zstd() {
+gamma_find_zstd() {
   local candidate
   for candidate in \
-    "${CYDER_ZSTD:-}" \
+    "${GAMMA_ZSTD:-}" \
     "$ENGINE_PROJECT_ROOT/tools/zstd/zstd" \
     "$(command -v zstd 2>/dev/null || true)"; do
     if [[ -n "$candidate" && -x "$candidate" ]]; then

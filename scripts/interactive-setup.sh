@@ -1,10 +1,20 @@
 #!/usr/bin/env bash
-# Interactive setup: builds a fully self-contained .app bundle — engine and
-# Wine prefix both live inside Contents/Resources/, nothing external needed.
+# Interactive setup: builds a macOS .app around the packaged Wine engine.
+#
+# Bundle layout:
+#   <App>.app/Contents/MacOS/launcher        thin launcher, paths baked in
+#   <App>.app/Contents/Resources/engine/     engine tree (read-only, signed)
+#
+# Mutable state lives outside the bundle so the app stays signable and
+# replaceable:
+#   ~/Library/Application Support/<App>/prefix    Wine prefix
+#   ~/Library/Application Support/<App>/app.env   user-editable settings
+#
 # Standalone — does not call other scripts in this repo.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 prompt_path() {
   local message="$1" default="$2" reply
@@ -13,12 +23,13 @@ prompt_path() {
 }
 
 echo "=========================================================="
-echo "GAMMA Wine Engine — Interactive Setup (self-contained .app)"
+echo "GAMMA Wine Engine — Interactive Setup"
 echo "=========================================================="
 
 # 1. Collect paths
+DEFAULT_ARTIFACT="$(ls -t "$REPO_ROOT"/dist/artifacts/*.tar.xz 2>/dev/null | head -n 1 || true)"
 while true; do
-  ARTIFACT_PATH="$(prompt_path "Path to engine tar.xz" "$SCRIPT_DIR/dist/artifacts/CX26-3-0-W11-Gamma002.tar.xz")"
+  ARTIFACT_PATH="$(prompt_path "Path to engine tar.xz" "${DEFAULT_ARTIFACT:-$REPO_ROOT/dist/artifacts/engine.tar.xz}")"
   ARTIFACT_PATH="${ARTIFACT_PATH/#\~/$HOME}"
   [[ -f "$ARTIFACT_PATH" ]] && break
   echo "  Not found: $ARTIFACT_PATH"
@@ -45,16 +56,39 @@ done
 EXE_WIN_PATH="G:\\${EXE_REL_PATH//\//\\}"
 EXE_RUN_DIR="$GAMMA_ROOT/$(dirname "$EXE_REL_PATH")"
 
-# Engine and prefix now live inside the app bundle
+echo ""
+echo "Graphics backend:"
+echo "  1) d3dmetal  Apple D3DMetal — D3D11/12 via Metal (default, 64-bit only)"
+echo "  2) dxmt      DXMT — D3D11/10 via Metal (works for 32-bit too)"
+echo "  3) dxvk      DXVK — D3D11/10/9 via Vulkan/MoltenVK (needs a Vulkan engine build)"
+echo "  4) wined3d   Wine's OpenGL renderer (fallback)"
+echo "  5) default   Let the engine pick (d3dmetal, then dxmt, then wined3d)"
+BACKEND_CHOICE="$(prompt_path "Select backend" "1")"
+case "$BACKEND_CHOICE" in
+  1|d3dmetal) GRAPHICS_BACKEND=d3dmetal ;;
+  2|dxmt)     GRAPHICS_BACKEND=dxmt ;;
+  3|dxvk)     GRAPHICS_BACKEND=dxvk ;;
+  4|wined3d)  GRAPHICS_BACKEND=wined3d ;;
+  5|default)  GRAPHICS_BACKEND=default ;;
+  *)
+    echo "  Unrecognized choice '$BACKEND_CHOICE', using d3dmetal"
+    GRAPHICS_BACKEND=d3dmetal
+    ;;
+esac
+
+APP_SUPPORT="$HOME/Library/Application Support/$APP_NAME"
+WINEPREFIX="$APP_SUPPORT/prefix"
 ENGINE_DIR="$APP_PATH/Contents/Resources/engine"
-WINEPREFIX="$APP_PATH/Contents/Resources/prefix"
+CONFIG_FILE="$APP_SUPPORT/app.env"
 
 echo ""
 echo "  Engine tar.xz:  $ARTIFACT_PATH"
 echo "  App bundle:     $APP_PATH"
-echo "  Engine (in app): $ENGINE_DIR"
-echo "  Prefix (in app): $WINEPREFIX"
+echo "  Engine (in app):$ENGINE_DIR"
+echo "  Prefix:         $WINEPREFIX"
+echo "  Settings:       $CONFIG_FILE"
 echo "  Game root:      $GAMMA_ROOT"
+echo "  Backend:        $GRAPHICS_BACKEND"
 echo ""
 read -r -p "Proceed? [Y/n]: " confirm || true
 if [[ "${confirm:-Y}" =~ ^[Nn] ]]; then
@@ -65,9 +99,7 @@ fi
 # 2. Create app skeleton, extract engine
 echo ""
 echo "==> Step 1: Extracting Wine engine into app bundle..."
-mkdir -p "$APP_PATH/Contents/MacOS"
-mkdir -p "$APP_PATH/Contents/Resources"
-mkdir -p "$ENGINE_DIR"
+mkdir -p "$APP_PATH/Contents/MacOS" "$APP_PATH/Contents/Resources" "$ENGINE_DIR" "$APP_SUPPORT"
 tar -xf "$ARTIFACT_PATH" -C "$ENGINE_DIR" --strip-components=1
 
 if [[ ! -x "$ENGINE_DIR/bin/wine" ]]; then
@@ -76,7 +108,22 @@ if [[ ! -x "$ENGINE_DIR/bin/wine" ]]; then
 fi
 arch -x86_64 "$ENGINE_DIR/bin/wine" --version
 
-# 3. Bootstrap prefix
+ENGINE_VERSION="$(head -n 1 "$ENGINE_DIR/version" 2>/dev/null || echo "1.0.0")"
+
+# Warn early when the selected backend is not actually present in the engine.
+case "$GRAPHICS_BACKEND" in
+  d3dmetal) [[ -d "$ENGINE_DIR/lib/d3dmetal" ]] || echo "  Warning: engine has no lib/d3dmetal" >&2 ;;
+  dxmt)     [[ -d "$ENGINE_DIR/lib/dxmt" ]] || echo "  Warning: engine has no lib/dxmt" >&2 ;;
+  dxvk)
+    [[ -d "$ENGINE_DIR/lib/dxvk" ]] || echo "  Warning: engine has no lib/dxvk" >&2
+    if [[ ! -f "$ENGINE_DIR/lib/wine/x86_64-unix/libMoltenVK.dylib" &&
+          ! -f "$ENGINE_DIR/lib64/libMoltenVK.dylib" ]]; then
+      echo "  Warning: engine has no libMoltenVK.dylib — DXVK will fall back to wined3d" >&2
+    fi
+    ;;
+esac
+
+# 3. Bootstrap prefix (outside the bundle)
 echo ""
 echo "==> Step 2: Bootstrapping Wine prefix..."
 arch -x86_64 "$ENGINE_DIR/bin/wineserver" -k 2>/dev/null || true
@@ -96,18 +143,19 @@ ln -sfn "Sikarugir" "$WINEPREFIX/drive_c/users/crossover"
 ln -sfn "Sikarugir" "$WINEPREFIX/drive_c/users/$USER"
 
 echo "==> Step 2.3: Registry overrides..."
-WINEPREFIX="$WINEPREFIX" arch -x86_64 "$ENGINE_DIR/bin/wine" reg add "HKEY_CURRENT_USER\Software\Wine\Drivers" /v Graphics /t REG_SZ /d mac /f
-WINEPREFIX="$WINEPREFIX" arch -x86_64 "$ENGINE_DIR/bin/wine" reg add "HKEY_CURRENT_USER\Software\Wine\Mac Driver" /v AllowSetGamma /t REG_DWORD /d 0 /f
+wine_reg() {
+  WINEPREFIX="$WINEPREFIX" arch -x86_64 "$ENGINE_DIR/bin/wine" reg add "$@" >/dev/null
+}
+wine_reg "HKEY_CURRENT_USER\Software\Wine\Drivers" /v Graphics /t REG_SZ /d mac /f
+wine_reg "HKEY_CURRENT_USER\Software\Wine\Mac Driver" /v AllowSetGamma /t REG_DWORD /d 0 /f
 
-WINEPREFIX="$WINEPREFIX" arch -x86_64 "$ENGINE_DIR/bin/wine" reg add "HKEY_CURRENT_USER\Software\Wine\DllOverrides" /v d3d11 /t REG_SZ /d builtin /f
-WINEPREFIX="$WINEPREFIX" arch -x86_64 "$ENGINE_DIR/bin/wine" reg add "HKEY_CURRENT_USER\Software\Wine\DllOverrides" /v dxgi /t REG_SZ /d builtin /f
-WINEPREFIX="$WINEPREFIX" arch -x86_64 "$ENGINE_DIR/bin/wine" reg add "HKEY_CURRENT_USER\Software\Wine\DllOverrides" /v d3d12 /t REG_SZ /d builtin /f
-WINEPREFIX="$WINEPREFIX" arch -x86_64 "$ENGINE_DIR/bin/wine" reg add "HKEY_CURRENT_USER\Software\Wine\DllOverrides" /v "*d3dcompiler_43" /t REG_SZ /d "native,builtin" /f
-WINEPREFIX="$WINEPREFIX" arch -x86_64 "$ENGINE_DIR/bin/wine" reg add "HKEY_CURRENT_USER\Software\Wine\DllOverrides" /v "*d3dcompiler_47" /t REG_SZ /d "native,builtin" /f
-WINEPREFIX="$WINEPREFIX" arch -x86_64 "$ENGINE_DIR/bin/wine" reg add "HKEY_CURRENT_USER\Software\Wine\DllOverrides" /v "*d3dx9_43" /t REG_SZ /d "native,builtin" /f
-WINEPREFIX="$WINEPREFIX" arch -x86_64 "$ENGINE_DIR/bin/wine" reg add "HKEY_CURRENT_USER\Software\Wine\DllOverrides" /v "*d3dx10_43" /t REG_SZ /d "native,builtin" /f
-WINEPREFIX="$WINEPREFIX" arch -x86_64 "$ENGINE_DIR/bin/wine" reg add "HKEY_CURRENT_USER\Software\Wine\DllOverrides" /v "*d3dx11_43" /t REG_SZ /d "native,builtin" /f
-WINEPREFIX="$WINEPREFIX" arch -x86_64 "$ENGINE_DIR/bin/wine" reg add "HKEY_CURRENT_USER\Software\Wine\DllOverrides" /v "winemenubuilder.exe" /t REG_SZ /d "" /f
+for dll in d3d11 dxgi d3d12; do
+  wine_reg "HKEY_CURRENT_USER\Software\Wine\DllOverrides" /v "$dll" /t REG_SZ /d builtin /f
+done
+for dll in "*d3dcompiler_43" "*d3dcompiler_47" "*d3dx9_43" "*d3dx10_43" "*d3dx11_43"; do
+  wine_reg "HKEY_CURRENT_USER\Software\Wine\DllOverrides" /v "$dll" /t REG_SZ /d "native,builtin" /f
+done
+wine_reg "HKEY_CURRENT_USER\Software\Wine\DllOverrides" /v "winemenubuilder.exe" /t REG_SZ /d "" /f
 
 echo "==> Step 2.4: Installing winetricks packages..."
 WINETRICKS_BIN="/tmp/winetricks"
@@ -129,7 +177,7 @@ WINE="$ENGINE_DIR/bin/wine" WINESERVER="$ENGINE_DIR/bin/wineserver" WINEPREFIX="
 
 WINEPREFIX="$WINEPREFIX" arch -x86_64 "$ENGINE_DIR/bin/wineserver" -w
 
-# 4. Finish .app bundle (Info.plist, app.env, launcher)
+# 4. Bundle metadata, settings file, launcher
 echo ""
 echo "==> Step 3: Writing .app bundle metadata & launcher..."
 
@@ -144,10 +192,8 @@ cat > "$APP_PATH/Contents/Info.plist" << EOF
 	<string>$APP_NAME</string>
 	<key>CFBundleExecutable</key>
 	<string>launcher</string>
-	<key>CFBundleIconFile</key>
-	<string>Anomaly</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.gamma.stalkeranomaly</string>
+	<string>com.gamma.wine-engine.$(echo "$APP_NAME" | tr '[:upper:] ' '[:lower:]-')</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>1.0</string>
 	<key>CFBundleName</key>
@@ -155,9 +201,9 @@ cat > "$APP_PATH/Contents/Info.plist" << EOF
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.5.2</string>
+	<string>$ENGINE_VERSION</string>
 	<key>CFBundleVersion</key>
-	<string>1.0.0</string>
+	<string>$ENGINE_VERSION</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>10.15</string>
 	<key>NSHighResolutionCapable</key>
@@ -170,35 +216,153 @@ cat > "$APP_PATH/Contents/Info.plist" << EOF
 </plist>
 EOF
 
-# app.env only carries toggles now — engine/prefix paths are resolved by the
-# launcher relative to its own location, so the bundle stays relocatable.
-cat > "$APP_PATH/Contents/Resources/app.env" << EOF
-# S.T.A.L.K.E.R. Anomaly App Runtime Configuration
-# Edit this file anytime to toggle settings directly!
+# Settings live outside the bundle: editing them must not break the signature.
+if [[ -f "$CONFIG_FILE" ]]; then
+  echo "  Keeping existing settings: $CONFIG_FILE"
+else
+  cat > "$CONFIG_FILE" << EOF
+# $APP_NAME runtime configuration — edit freely, no rebuild needed.
+#
+# This file is sourced by the launcher on every start, before its own defaults,
+# so anything set here wins. It lives outside the .app bundle, so editing it
+# never invalidates the bundle signature.
+#
+# To see which backend actually activated, launch from a terminal and look for
+#   gamma-cxcompatdb:info: graphics backend=... path=...
+# on stderr (WINEDEBUG=-all does not suppress it).
 
-export MTL_HUD_ENABLED=1
-export WINEMSYNC=1
+# ---------------------------------------------------------------------------
+# Backend selection
+# ---------------------------------------------------------------------------
+# d3dmetal  Apple D3DMetal, D3D11/12 via Metal. 64-bit only — 32-bit processes
+#           fall back, since GPTK ships no i386 payload.
+# dxmt      DXMT, D3D11/10 via Metal. The only Metal backend for 32-bit.
+# dxvk      DXVK, D3D11/10/9 via Vulkan. Needs an engine built --with-vulkan;
+#           falls back to wined3d otherwise.
+# wined3d   Wine's OpenGL renderer.
+# default   Try d3dmetal, then dxmt, then wined3d.
+export GAMMA_GRAPHICS_BACKEND=$GRAPHICS_BACKEND
+
+# ---------------------------------------------------------------------------
+# General
+# ---------------------------------------------------------------------------
+export MTL_HUD_ENABLED=1          # Metal performance HUD (both backends)
+export WINEMSYNC=1                # Darwin Mach semaphore sync
 export WINEESYNC=1
 export ROSETTA_ADVERTISE_AVX=1
-export WINEDEBUG="-all"
+export WINEDEBUG="-all"           # fixme-all for a middle ground
+
+# Extra arguments passed to the game when launched from Finder or the Dock.
+# Arguments given on the command line override these.
+export DEFAULT_GAME_ARGS=""
+
+# ---------------------------------------------------------------------------
+# D3DMetal  (GAMMA_GRAPHICS_BACKEND=d3dmetal)
+# ---------------------------------------------------------------------------
+# Variable names below were read out of the shipped libd3dshared.dylib and
+# D3DMetal.framework, so they exist in this build. Apple documents almost none
+# of them, so the value notes are the usual convention (flags are 0/1) — treat
+# anything beyond on/off as worth verifying by launching from a terminal.
+# The launcher already points D3DMetal at the in-bundle engine, so
+# CX_D3DMETALPATH and CX_APPLEGPTK_LIBD3DSHARED_PATH do not belong here.
+#
+#export D3DM_ENABLE_METALFX=1     # MetalFX upscaling.            0 | 1
+#export D3DM_MAX_FPS=120          # Frame cap.                    integer fps
+#export D3DM_SHOW_HUD_STATS=1     # D3DMetal's own stats overlay. 0 | 1
+#                                 #   (separate from MTL_HUD_ENABLED above)
+#export D3DM_LOD_BIAS=-0.5        # Texture LOD bias. Negative = sharper and
+#                                 #   more aliased.               float
+#export D3DM_MIN_LOD_CLAMP=0      # Floor for texture LOD.        float
+#export D3DM_SUPPORT_DXR=1        # Advertise DXR raytracing.     0 | 1
+#export D3DM_MTL4=1               # Use the Metal 4 backend path. 0 | 1
+#export D3DM_POSITION_INVARIANCE=1 # Force invariant vertex positions across
+#                                 #   passes; fixes z-fighting and shadow
+#                                 #   shimmer in some titles.     0 | 1
+#export D3DM_SAMPLE_NAN_TO_ZERO=1 # Clamp NaN texels to 0; fixes black or
+#                                 #   flickering textures.        0 | 1
+#export D3DM_FLUSH_POS_INF_TO_NAN=1 # Related float-edge-case fixup. 0 | 1
+#export D3DM_IGNORE_D3D11_RENDER_BARRIERS=1
+#                                 # Skip D3D11 render barriers. Faster, can
+#                                 #   corrupt rendering.          0 | 1
+#export D3DM_BOUNDS_CHECK=1       # Debug bounds checking; slow.  0 | 1
+#export D3DM_ERROR_MODE=1         # How hard to fail on API misuse; higher is
+#                                 #   stricter.                   integer
+#export D3DM_LOGLEVEL_INFO=1      # Verbose D3DMetal logging.     0 | 1
+#export D3DM_NVNGX_PATH=          # Directory holding NVNGX/DLSS payloads.
+#                                 #                               path
+#
+# Adapter spoofing — some games gate features or quality presets on the
+# reported GPU. Values are what the game will see reported.
+#export D3DM_VENDOR_ID=0x10de           # 0x10de NVIDIA, 0x1002 AMD, 0x8086 Intel
+#export D3DM_DEVICE_ID=0x2684           # PCI device id             hex
+#export D3DM_DEVICE_DESCRIPTION="NVIDIA GeForce RTX 4090"  # string
+#export D3DM_DEVICE_REVISION=0          # PCI revision              integer
+#export D3DM_DEVICE_SUBSYS=0            # PCI subsystem id          integer
+
+# ---------------------------------------------------------------------------
+# DXMT  (GAMMA_GRAPHICS_BACKEND=dxmt)
+# ---------------------------------------------------------------------------
+# Names read out of the shipped winemetal.so and DXMT d3d11.dll.
+#
+#export DXMT_METALFX_SPATIAL_SWAPCHAIN=1
+#                                 # MetalFX spatial upscaling on the
+#                                 #   swapchain.                  0 | 1
+#                                 #   Pair with d3d11.metalSpatialUpscaleFactor
+#export DXMT_LOG_LEVEL=info       # trace | debug | info | warn | error
+#                                 #   (trace/debug/error confirmed in binary)
+#export DXMT_LOG_PATH=            # Directory for the log file.   path
+#export DXMT_SHADER_CACHE=1       # Persist compiled shaders; big win on
+#                                 #   repeat launches.            0 | 1
+#export DXMT_SHADER_CACHE_PATH=   # Where to keep that cache.     path
+#export DXMT_CAPTURE_FRAME=       # Capture this frame index for Metal
+#                                 #   debugging.                  integer
+#export DXMT_CAPTURE_EXECUTABLE=  # Only capture for this exe.    name
+#
+# Fine-grained options. Either a semicolon-separated list here, or point
+# DXMT_CONFIG_FILE at a dxmt.conf holding one key=value per line.
+#export DXMT_CONFIG="d3d11.metalSpatialUpscaleFactor=1.5;d3d11.preferredMaxFrameRate=120"
+#export DXMT_CONFIG_FILE=
+#
+# Recognized keys in this build:
+#   d3d11.metalSpatialUpscaleFactor  Render below output and upscale.
+#                                    float, 1.0 = off, 1.5 / 2.0 typical
+#   d3d11.preferredMaxFrameRate      Frame cap.               integer fps
+#   d3d11.maxFeatureLevel            Cap reported D3D level.
+#                                    10_0 | 10_1 | 11_0 | 11_1 | 12_0 | 12_1
+#   d3d11.defuseFma                  Split fused multiply-add; fixes shader
+#                                    precision mismatches.    true | false
+#   d3d11.ignoreMapFlagNoWait        Ignore MAP_FLAG_DO_NOT_WAIT; trades
+#                                    stutter for throughput.  true | false
+#   d3d11.sampleNaNToZero            Clamp NaN texels to 0.   true | false
+#   d3d11.loH                        Level-of-detail heuristic tweak.
+#   dxmt.shaderMetalVersion          Force a Metal shader language version.
+#   dxgi.customVendorId              Spoof adapter vendor.    hex
+#   dxgi.customDeviceId              Spoof adapter device.    hex
+#   dxgi.customDeviceDesc            Spoof adapter name.      string
+#   dxgi.forceSDR                    Disable HDR output.      true | false
+#   dxgi.handleAltTab                Let DXMT handle alt-tab. true | false
 EOF
+  echo "  Wrote settings: $CONFIG_FILE"
+fi
 
 cat > "$APP_PATH/Contents/MacOS/launcher" << EOF
 #!/usr/bin/env bash
 set -euo pipefail
 
 APP_DIR="\$(cd "\$(dirname "\$0")/../.." && pwd)"
-RESOURCES_DIR="\$APP_DIR/Contents/Resources"
+ENGINE_DIR="\$APP_DIR/Contents/Resources/engine"
+APP_SUPPORT="$APP_SUPPORT"
+CONFIG_FILE="\$APP_SUPPORT/app.env"
 
-# Engine and prefix live inside the bundle itself
-ENGINE_DIR="\$RESOURCES_DIR/engine"
-export WINEPREFIX="\$RESOURCES_DIR/prefix"
+export WINEPREFIX="\$APP_SUPPORT/prefix"
 
-# Load embedded environment configuration (toggles only)
-if [[ -f "\$RESOURCES_DIR/app.env" ]]; then
-  source "\$RESOURCES_DIR/app.env"
+# User settings (outside the bundle) win over the defaults below.
+if [[ -f "\$CONFIG_FILE" ]]; then
+  # shellcheck disable=SC1090
+  source "\$CONFIG_FILE"
 fi
 
+export GAMMA_GRAPHICS_BACKEND="\${GAMMA_GRAPHICS_BACKEND:-$GRAPHICS_BACKEND}"
 export WINEMSYNC="\${WINEMSYNC:-1}"
 export WINEESYNC="\${WINEESYNC:-1}"
 export ROSETTA_ADVERTISE_AVX="\${ROSETTA_ADVERTISE_AVX:-1}"
@@ -208,12 +372,23 @@ export WINEBOOT_HIDE_DIALOG=1
 export LC_ALL="en_US.UTF-8"
 export LANG="en_US.UTF-8"
 
-EXE_PATH="$EXE_WIN_PATH"
+# D3DMetal needs its framework and shared library located explicitly. Only
+# export them when D3DMetal can actually be selected: cxcompatdb.so sets
+# CX_APPLEGPTK_LIBD3DSHARED_PATH itself once a backend is active, and forcing
+# these for a DXMT or DXVK run points the process at the wrong renderer.
+case "\$GAMMA_GRAPHICS_BACKEND" in
+  d3dmetal | default)
+    if [[ -f "\$ENGINE_DIR/lib/external/libd3dshared.dylib" ]]; then
+      export CX_APPLEGPT_LIBD3DSHARED_PATH="\$ENGINE_DIR/lib/external/libd3dshared.dylib"
+      export CX_APPLEGPTK_LIBD3DSHARED_PATH="\$ENGINE_DIR/lib/external/libd3dshared.dylib"
+    fi
+    if [[ -d "\$ENGINE_DIR/lib/external/D3DMetal.framework" ]]; then
+      export CX_D3DMETALPATH="\$ENGINE_DIR/lib/external/D3DMetal.framework"
+    fi
+    ;;
+esac
 
-# Explicit D3DMetal Paths
-export CX_APPLEGPT_LIBD3DSHARED_PATH="\$ENGINE_DIR/lib/external/libd3dshared.dylib"
-export CX_APPLEGPTK_LIBD3DSHARED_PATH="\$ENGINE_DIR/lib/external/libd3dshared.dylib"
-export CX_D3DMETALPATH="\$ENGINE_DIR/lib/external/D3DMetal.framework"
+EXE_PATH="$EXE_WIN_PATH"
 
 cd "$EXE_RUN_DIR"
 
@@ -223,7 +398,7 @@ cd "$EXE_RUN_DIR"
   osascript -e 'tell application "System Events" to set frontmost of (first process whose name contains "wine" or name contains "Anomaly") to true' 2>/dev/null || true
 ) &
 
-# Arguments to pass (bash 3.2 on macOS chokes on "\${@}" under set -u when empty)
+# bash 3.2 on macOS chokes on "\${@}" under set -u when empty
 if [[ \$# -eq 0 && -n "\${DEFAULT_GAME_ARGS:-}" ]]; then
   # shellcheck disable=SC2086
   set -- \$DEFAULT_GAME_ARGS
@@ -234,12 +409,24 @@ EOF
 
 chmod +x "$APP_PATH/Contents/MacOS/launcher"
 
+# 5. Ad-hoc sign the bundle. The engine payload is already signed by
+#    pack-engine-artifact.sh, so only the wrapper needs a signature.
+echo "==> Step 4: Signing bundle..."
+codesign --force --sign - --timestamp=none "$APP_PATH/Contents/MacOS/launcher" 2>/dev/null || true
+if codesign --force --sign - --timestamp=none "$APP_PATH" 2>/dev/null; then
+  echo "  Ad-hoc signed $APP_PATH"
+else
+  echo "  Warning: could not sign the bundle (it will still run locally)" >&2
+fi
+
 echo ""
 echo "=========================================================="
-echo "Setup complete — fully self-contained bundle."
-echo "  App:     $APP_PATH"
-echo "  Engine:  $ENGINE_DIR  (inside app)"
-echo "  Prefix:  $WINEPREFIX  (inside app)"
+echo "Setup complete."
+echo "  App:      $APP_PATH"
+echo "  Engine:   $ENGINE_DIR  (inside app, read-only)"
+echo "  Prefix:   $WINEPREFIX"
+echo "  Settings: $CONFIG_FILE"
+echo "  Backend:  $GRAPHICS_BACKEND  (change it in app.env, no rebuild needed)"
 echo ""
 echo "Launch via:  open \"$APP_PATH\""
 echo "Or CLI:      \"$APP_PATH/Contents/MacOS/launcher\" -dbg -nointro"

@@ -424,7 +424,8 @@ static const char *current_machine_directory( uint16_t *machine )
 }
 
 static int validate_backend_directory( const char *path, const char *directory,
-                                       uint16_t machine, int require_winemetal )
+                                       uint16_t machine, int require_winemetal,
+                                       int require_dxgi )
 {
     unsigned int j;
     int found = 0;
@@ -446,8 +447,9 @@ static int validate_backend_directory( const char *path, const char *directory,
         if (!strcmp( graphics_modules[j], "winemetal" )) have_winemetal = 1;
         found = 1;
     }
-    if (!have_d3d11 || !have_dxgi || (require_winemetal && !have_winemetal))
-        log_message( "error", "backend lacks d3d11.dll, dxgi.dll%s for %s: %s",
+    if (!have_d3d11 || (require_dxgi && !have_dxgi) || (require_winemetal && !have_winemetal))
+        log_message( "error", "backend lacks d3d11.dll%s%s for %s: %s",
+                     require_dxgi ? ", dxgi.dll" : "",
                      require_winemetal ? " or winemetal.dll" : "", directory, path );
     else return found;
     return 0;
@@ -535,7 +537,9 @@ static int activate_backend( const struct slice *selection )
         }
     }
     machine_dir = current_machine_directory( &machine );
-    if (!validate_backend_directory( path, machine_dir, machine, !strcmp( backend, "dxmt" )))
+    /* DXVK ships no dxgi.dll: it pairs with Wine's builtin DXGI. */
+    if (!validate_backend_directory( path, machine_dir, machine, !strcmp( backend, "dxmt" ),
+                                     strcmp( backend, "dxvk" ) && strcmp( backend, "dxvk2" ) ))
         goto unavailable;
     if (!strcmp( backend, "dxvk" ) || !strcmp( backend, "dxvk2" ))
     {

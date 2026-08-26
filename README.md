@@ -8,17 +8,26 @@
 
 `gamma-wine-engine` provides a standalone, relocatable Wine 11 runtime and packages the production `wswine.bundle` tarball (`gamma-wine-x86_64-CX26-3-0-W11-Gamma001.tar.xz`) used by `gamma-setup-tool`.
 
-> 📖 **Looking for a step-by-step setup guide?** See [How-To Use Guide](docs/how-to-use.md) for instructions on bootstrapping a prefix and creating a standalone `.app` bundle from only the `.tar.xz` engine archive.
+### Documentation
+
+| Doc | For |
+|---|---|
+| [Getting Started](docs/getting-started.md) | Build the `.app`, run it, change its settings |
+| [How This Repo Works](docs/architecture.md) | Pipeline, scripts, patches, conventions |
+| [Graphics Backends](docs/renderers.md) | Renderer layout, switching, DXVK status |
+| [Patch Set](patches/README.md) | What each patch does and why one is excluded |
+| [Why deps build from source](docs/why-no-prebuilt-deps.md) | The `.brew-x86` situation |
 
 ### Key Features:
 - **Base Runtime**: CrossOver 26.3.0 built on **Wine 11.0** (`x86_64` under Rosetta 2 on Apple Silicon).
-- **Dual Metal Graphics Architecture**:
-  - **Apple D3DMetal (GPTK 4.0b1)**: Auto-activated by default for 64-bit Direct3D 11/12 rendering via Apple Metal.
-  - **DXMT**: Bundled as a selectable Direct3D 11/10 backend (and auto-selected for 32-bit processes).
-- **Dynamic Backend Switcher (`cxcompatdb.so`)**: Intercepts process startup to route graphics backends dynamically using `GAMMA_GRAPHICS_BACKEND=d3dmetal` or `dxmt` with zero DLL file modifications in the prefix.
+- **Switchable Graphics Backends**: D3DMetal (Apple GPTK 4.0b1), DXMT, DXVK and wined3d ship side by side in their own directories; none overwrites a Wine builtin. See [docs/renderers.md](docs/renderers.md).
+  - **Apple D3DMetal (GPTK 4.0b1)**: Default for 64-bit Direct3D 11/12 via Metal.
+  - **DXMT**: Selectable D3D11/10 via Metal, and the only Metal backend for 32-bit processes.
+  - **DXVK**: Staged from a local CrossOver.app, inert until the engine is rebuilt with Vulkan.
+- **Dynamic Backend Switcher (`cxcompatdb.so`)**: Intercepts process startup and prepends the selected backend to the DLL search path — `GAMMA_GRAPHICS_BACKEND=d3dmetal|dxmt|dxvk|wined3d`, with no DLL file modifications in the prefix.
 - **Darwin Mach Semaphore Sync (`WINEMSYNC=1`)**: In-process shared memory thread synchronization, eliminating wineserver IPC overhead and micro-stuttering across X-Ray Engine's worker threads.
 - **Engine-Level Stability Patches**:
-  - `win32u.so`: Clean message-wait event loop preventing UI/menu click deadlocks.
+  - `win32u.so`: Stock upstream message-wait loop (the legacy MapleStory handoff hack is deliberately not applied), preventing UI/menu click deadlocks.
   - `ntdll.so`: Hardware memory barrier in `NtFlushProcessWriteBuffers` avoiding expensive Mach register queries that cause thread stalls under Rosetta 2.
 - **Self-Contained Portability**: All runtime dependencies (`gnutls`, `freetype`, `libpng`, `zlib`, `gettext`, `libunistring`) are bundled with `@loader_path` relative linking.
 
@@ -28,7 +37,7 @@
 
 | Type | Path | Purpose |
 |---|---|---|
-| **Development Staging Tree** | `install/wine-cx26-x86_64/` | Live uncompressed build tree used for direct testing (`bin/wine`, `bin/wineserver`, `lib/d3dmetal/`) |
+| **Development Staging Tree** | `install/wine-cx26-x86_64/` | Live uncompressed build tree (`bin/wine`, `bin/wineserver`, `lib/d3dmetal/`, `lib/dxmt/`, `lib/dxvk/`) |
 | **Packaged Release Tarball** | `dist/artifacts/gamma-wine-x86_64-CX26-3-0-W11-Gamma001.tar.xz` | Codesigned, stripped, standalone production archive (~86 MB) |
 | **Setup Tool Asset** | `gamma-setup-tool/sources/GAMMASetupTool/Resources/wine-engine/CX26-3W11-Gamma0-1.tar.xz` | Bundled asset embedded in `GAMMA Setup Tool.app` |
 
@@ -36,43 +45,28 @@
 
 ## Dedicated Scripts
 
-### 1. Recreate Prefix (`scripts/recreate-prefix.sh`)
-Wipes and bootstraps the prefix from scratch with all required winetricks, registry keys, and drive mappings:
+### 1. Interactive Setup (`scripts/interactive-setup.sh`)
+Builds a fully self-contained `.app` from an engine `.tar.xz`: extracts the engine, bootstraps a
+prefix, installs winetricks verbs, and writes the bundle metadata and launcher. Prompts for the
+artifact path, app name and location, game root, and executable. Standalone — calls no other script.
 ```bash
-bash scripts/recreate-prefix.sh
+bash scripts/interactive-setup.sh
 ```
 
-### 2. Launch Game (`scripts/launch-3dss5.sh`)
-Launches S.T.A.L.K.E.R. Anomaly directly using the test prefix with low-latency taskpolicy and optimal performance flags:
+### 2. Build Wine (`scripts/build-wine.sh`)
+Full engine build: extracts sources, applies `patches/`, configures and builds CrossOver Wine for
+`x86_64`, then chains `build-cxcompatdb.sh`, `bundle-wine-dylibs.sh`, and
+`install-renderers.sh`.
 ```bash
-bash scripts/launch-3dss5.sh -dbg
-```
-*(Pass any game arguments such as `-dbg`, `-nointro`, etc. directly to the script.)*
-
-### 3. Generate Native macOS App Bundle (`scripts/create-app-bundle.sh`)
-Builds a standalone `dist/S.T.A.L.K.E.R. Anomaly.app` bundle for direct launching from Finder/Dock with native WindowServer priority and display refresh sync.
-
-**Configuring before creation:**
-```bash
-# Via CLI Flags & Custom Variables:
-bash scripts/create-app-bundle.sh --no-hud -e DXVK_HUD=fps -e MY_VAR=value
-
-# Or simply pass any KEY=VALUE pairs:
-bash scripts/create-app-bundle.sh DXVK_HUD=fps FOO=bar --game-args="-dbg -nointro"
-
-# Or via persistent config template:
-cp config/app.env.example config/app.env
-# Edit config/app.env as desired, then run:
-bash scripts/create-app-bundle.sh
+bash scripts/build-wine.sh --cx 26 --without-vulkan
 ```
 
-**Launch the App:**
+### 3. Package Release Artifact (`scripts/pack-engine-artifact.sh`)
+Stages, strips, re-bundles dylibs, codesigns, scans minOS, and packs the install tree into
+`dist/artifacts/`, writing the release manifest alongside it.
 ```bash
-open "dist/S.T.A.L.K.E.R. Anomaly.app"
+bash scripts/pack-engine-artifact.sh --force
 ```
-*(You can also edit `dist/S.T.A.L.K.E.R. Anomaly.app/Contents/Resources/app.env` directly at any time.)*
-
----
 
 ## How to Create & Configure a New Prefix Manually
 
@@ -81,7 +75,7 @@ If you wish to create a custom prefix without the script, follow these steps:
 ### Step 1: Initialize Prefix
 ```bash
 export WINE_DIR="$PWD/install/wine-cx26-x86_64"
-export WINEPREFIX="$HOME/Library/Application Support/gamma-test-prefix"
+export WINEPREFIX="$HOME/Library/Application Support/GAMMA/prefix"
 
 # Clean prior server instance
 arch -x86_64 "$WINE_DIR/bin/wineserver" -k 2>/dev/null || true
@@ -127,7 +121,11 @@ WINEPREFIX="$WINEPREFIX" arch -x86_64 "$WINE_DIR/bin/wine" reg add "HKEY_CURRENT
 
 ### Step 4: Install Winetricks Verbs
 ```bash
-WINEPREFIX="$WINEPREFIX" bash scripts/winetricks.sh -q \
+curl -fsSL https://raw.githubusercontent.com/Winetricks/winetricks/master/src/winetricks -o /tmp/winetricks
+chmod +x /tmp/winetricks
+
+WINE="$WINE_DIR/bin/wine" WINESERVER="$WINE_DIR/bin/wineserver" WINEPREFIX="$WINEPREFIX" \
+  /tmp/winetricks -q \
   d3dx9_43 \
   d3dx11_43 \
   d3dcompiler_43 \
@@ -146,7 +144,7 @@ WINEPREFIX="$WINEPREFIX" arch -x86_64 "$WINE_DIR/bin/wineserver" -w
 To run the game with full performance and DirectInput mouse capture:
 
 ```bash
-export WINEPREFIX="$HOME/Library/Application Support/gamma-test-prefix"
+export WINEPREFIX="$HOME/Library/Application Support/GAMMA/prefix"
 export WINEMSYNC=1
 export ROSETTA_ADVERTISE_AVX=1
 export MTL_HUD_ENABLED=1
@@ -166,9 +164,14 @@ arch -x86_64 "$PWD/install/wine-cx26-x86_64/bin/wine" "G:\3dss5\bin\AnomalyDX11A
   ```bash
   bash scripts/build-wine.sh --cx 26 --without-vulkan
   ```
-- **Install Renderers (D3DMetal + DXMT)**:
+- **Install Renderers (D3DMetal + DXMT)** — chained automatically by `build-wine.sh`
+  (skip with `--skip-renderers`); run standalone to re-stage them:
   ```bash
   bash scripts/install-renderers.sh install/wine-cx26-x86_64
+  ```
+- **Fetch latest DXMT build**:
+  ```bash
+  bash scripts/fetch-dxmt.sh
   ```
 - **Package Release Archive**:
   ```bash

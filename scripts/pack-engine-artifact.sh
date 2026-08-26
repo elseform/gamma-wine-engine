@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build reusable Wine engine artifact (strip + compressed tar) for Cyder / CyderBits apps.
+# Build reusable Wine engine artifact (strip + compressed tar) for GAMMA.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -12,6 +12,11 @@ source "$SCRIPT_DIR/env-x86_64.sh"
 FORCE=0
 DRY_RUN=0
 FORMAT="${GAMMA_ENGINE_FORMAT:-${CYDER_ENGINE_FORMAT:-xz}}"
+# Compression effort. The old defaults (xz -9e / zstd -22 --ultra) cost several
+# minutes for a few MB; -6 and -12 land within a few percent in a fraction of
+# the time. Override with GAMMA_ENGINE_COMPRESS_LEVEL.
+XZ_LEVEL="${GAMMA_ENGINE_COMPRESS_LEVEL:-6}"
+ZSTD_LEVEL="${GAMMA_ENGINE_COMPRESS_LEVEL:-12}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -53,10 +58,11 @@ Usage: $(basename "$0") [--force] [--dry-run] [--zstd] [--format zstd|xz]
        [--media-profile full-video|minimal]
 
 Build a compressed engine artifact from install/wine-cx26-x86_64 (or WINE_INSTALL).
-  xz:   dist/artifacts/gamma-wine-x86_64-<CX26-winever>.tar.xz (default, xz -9e)
+  xz:   dist/artifacts/gamma-wine-x86_64-<CX26-winever>.tar.xz (default, xz -$XZ_LEVEL)
   zstd: dist/artifacts/engine-<CX26-winever>.tar.zst (--zstd)
 Set CYDER_ENGINE_VERSION to override the detected version label.
-Set CYDER_ENGINE_FORMAT=zstd or pass --zstd to build with zstd -22 --ultra.
+Set GAMMA_ENGINE_FORMAT=zstd or pass --zstd to build with zstd -$ZSTD_LEVEL.
+Set GAMMA_ENGINE_COMPRESS_LEVEL to trade size against packing time.
 The default media profile is minimal (no GStreamer full-video plugin set);
 pass --media-profile full-video only if a video-capable build is needed.
 EOF
@@ -115,13 +121,13 @@ esac
 }
 CXCOMPATDB="$WINE_INSTALL/lib/wine/x86_64-unix/cxcompatdb.so"
 [[ -f "$CXCOMPATDB" ]] || {
-  echo "Missing Cyder cxcompatdb at $CXCOMPATDB — run scripts/build-cyder-cxcompatdb.sh." >&2
+  echo "Missing cxcompatdb at $CXCOMPATDB — run scripts/build-cxcompatdb.sh." >&2
   exit 1
 }
 if [[ "$FORMAT" == "zst" ]]; then
-  ZSTD_BIN="$(cyder_find_zstd 2>/dev/null || true)"
+  ZSTD_BIN="$(gamma_find_zstd 2>/dev/null || true)"
   [[ -x "$ZSTD_BIN" ]] || {
-    echo "Missing zstd — rebuild the bundled tool with scripts/build-universal-zstd.sh" >&2
+    echo "Missing zstd — install with: brew install zstd (or set GAMMA_ZSTD=/path/to/zstd)" >&2
     exit 1
   }
 else
@@ -136,15 +142,15 @@ if [[ -z "$ENGINE_VERSION_LABEL" ]]; then
   ENGINE_VERSION_LABEL="$(head -n 1 "$OGOM/config/engine-version.txt" 2>/dev/null || true)"
 fi
 if [[ -z "$ENGINE_VERSION_LABEL" ]]; then
-  ENGINE_VERSION_LABEL="$(cyder_detect_engine_version_label "$WINE_INSTALL/bin/wine")" || {
+  ENGINE_VERSION_LABEL="$(gamma_detect_engine_version_label "$WINE_INSTALL/bin/wine")" || {
     echo "Could not detect engine version from config or wine --version" >&2
     exit 1
   }
 fi
-ENGINE_VERSION_SLUG="$(cyder_engine_version_slug_from_label "$ENGINE_VERSION_LABEL")"
+ENGINE_VERSION_SLUG="$(gamma_engine_version_slug_from_label "$ENGINE_VERSION_LABEL")"
 ENGINE_VERSION="$ENGINE_VERSION_SLUG"
-ARTIFACTS_DIR="$(cyder_engine_artifacts_dir)"
-ARCHIVE="$(cyder_engine_archive_path_for_format "$ENGINE_VERSION" "$ARTIFACTS_DIR" "$FORMAT")"
+ARTIFACTS_DIR="$(gamma_engine_artifacts_dir)"
+ARCHIVE="$(gamma_engine_archive_path_for_format "$ENGINE_VERSION" "$ARTIFACTS_DIR" "$FORMAT")"
 VERSION_FILE="$ARTIFACTS_DIR/engine-version.txt"
 STAMP_FILE="$ARTIFACTS_DIR/.pack-stamp"
 
@@ -154,7 +160,7 @@ if [[ -f "$ARCHIVE" && "$FORCE" -ne 1 ]]; then
   exit 0
 fi
 
-STAGING="$(mktemp -d "${TMPDIR:-/tmp}/cyder-engine-pack.XXXXXX")"
+STAGING="$(mktemp -d "${TMPDIR:-/tmp}/gamma-engine-pack.XXXXXX")"
 cleanup() {
   rm -rf "$STAGING"
 }
@@ -165,12 +171,10 @@ echo "==> Staging engine tree ($ENGINE_VERSION_LABEL)"
 echo "==> Embedding GStreamer media profile $MEDIA_PROFILE from $MEDIA_INSTALL"
 # Stage the engine tree
 rsync -a --delete \
-  --exclude 'lib/dxvk' \
-  --exclude 'lib/dxvk2' \
   --exclude 'lib/*.bak-*' \
   "$WINE_INSTALL/" "$ENGINE_TREE/"
 find "$ENGINE_TREE" -name '.DS_Store' -delete 2>/dev/null || true
-cyder_write_engine_version_file "$ENGINE_TREE" "$ENGINE_VERSION_LABEL"
+gamma_write_engine_version_file "$ENGINE_TREE" "$ENGINE_VERSION_LABEL"
 
 bash "$SCRIPT_DIR/strip-wine-install.sh" "$ENGINE_TREE"
 # Preserve MoltenVK already in the install tree (VULKAN_SOURCE=existing only
@@ -178,36 +182,11 @@ bash "$SCRIPT_DIR/strip-wine-install.sh" "$ENGINE_TREE"
 VULKAN_MODE="${VULKAN_MODE:-with}" VULKAN_SOURCE=existing \
   bash "$SCRIPT_DIR/bundle-wine-dylibs.sh" "$ENGINE_TREE"
 
-# Cyder008+ owns the MoltenVK wait-poll workaround in the engine artifact.
-# Refuse to publish a plain MoltenVK or a broken shim-on-shim pair so the App
-# never needs to mutate the installed engine at runtime.
-if [[ "$ENGINE_VERSION_LABEL" == *Cyder008* || "$ENGINE_VERSION_LABEL" == *Cyder009* ]]; then
-  MOLTENVK_DIR="$ENGINE_TREE/lib/wine/x86_64-unix"
-  MOLTENVK_SHIM="$MOLTENVK_DIR/libMoltenVK.dylib"
-  MOLTENVK_REAL="$MOLTENVK_DIR/libMoltenVK.real.dylib"
-  [[ -f "$MOLTENVK_SHIM" && -f "$MOLTENVK_REAL" ]] || {
-    echo "Refusing to pack $ENGINE_VERSION_LABEL without the MoltenVK wait-poll shim pair" >&2
-    exit 1
-  }
-  otool -L "$MOLTENVK_SHIM" | grep -Fq '@loader_path/libMoltenVK.real.dylib' || {
-    echo "Refusing to pack: MoltenVK shim does not re-export libMoltenVK.real.dylib" >&2
-    exit 1
-  }
-  nm -gj "$MOLTENVK_SHIM" | grep -Fxq '_vkWaitSemaphores' || {
-    echo "Refusing to pack: MoltenVK shim does not export vkWaitSemaphores" >&2
-    exit 1
-  }
-  if otool -L "$MOLTENVK_REAL" | tail -n +3 | grep -Fq 'libMoltenVK.real.dylib'; then
-    echo "Refusing to pack: MoltenVK.real.dylib is itself a shim" >&2
-    exit 1
-  fi
-  echo "OK: MoltenVK wait-poll shim pair ($ENGINE_VERSION_LABEL)"
-fi
 bash "$SCRIPT_DIR/sign-wine.sh" --root "$ENGINE_TREE" --entitlements "$ENTITLEMENTS_PLIST"
 
 PACKED_CXCOMPATDB="$ENGINE_TREE/lib/wine/x86_64-unix/cxcompatdb.so"
 [[ -f "$PACKED_CXCOMPATDB" ]] || {
-  echo "Refusing to pack without Cyder cxcompatdb.so" >&2
+  echo "Refusing to pack without cxcompatdb.so" >&2
   exit 1
 }
 strings -a "$PACKED_CXCOMPATDB" | grep -Eq 'GAMMA_ACTIVE_GRAPHICS_BACKEND_PATH|GRAPHICS_BACKEND_PATH|CYDER_GRAPHICS_BACKEND_PATH' || {
@@ -236,17 +215,17 @@ fi
 
 case "$FORMAT" in
   zst)
-    echo "==> Compressing with zstd (-22 --ultra)"
+    echo "==> Compressing with zstd (-$ZSTD_LEVEL)"
     (
       cd "$STAGING"
-      tar -cf - wswine.bundle | "$ZSTD_BIN" -22 --ultra -T0 -o "$ARCHIVE"
+      tar -cf - wswine.bundle | "$ZSTD_BIN" "-$ZSTD_LEVEL" -T0 -o "$ARCHIVE"
     )
     ;;
   xz)
-    echo "==> Compressing with xz (-9e -T0)"
+    echo "==> Compressing with xz (-$XZ_LEVEL -T0)"
     (
       cd "$STAGING"
-      tar -cf - wswine.bundle | xz -9e -T0 -c >"$ARCHIVE"
+      tar -cf - wswine.bundle | xz "-$XZ_LEVEL" -T0 -c >"$ARCHIVE"
     )
     ;;
 esac

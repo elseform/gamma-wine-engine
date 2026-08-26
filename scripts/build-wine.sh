@@ -13,8 +13,8 @@ JOBS="$(sysctl -n hw.ncpu 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null |
 VULKAN_MODE=without
 VULKAN_SOURCE=homebrew
 BUILD_TESTS=0
-MAPLESTORY=0
 VULKAN_SONAME_FALLBACK=0
+SKIP_RENDERERS=0
 
 run() {
   if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -34,9 +34,9 @@ while [[ $# -gt 0 ]]; do
     --bootstrap-brew) BOOTSTRAP_BREW=1 ;;
     --install-deps) INSTALL_DEPS=1 ;;
     --configure-only) CONFIGURE_ONLY=1 ;;
+    --skip-renderers) SKIP_RENDERERS=1 ;;
     --prepare-only) PREPARE_ONLY=1 ;;
     --with-tests) BUILD_TESTS=1 ;;
-    --maplestory) MAPLESTORY=1 ;;
     --vulkan-soname-fallback) VULKAN_SONAME_FALLBACK=1 ;;
     --cx)
       CX_VERSION="$2"
@@ -66,8 +66,6 @@ Options:
   --cx 26         CrossOver release (default: 26)
   --prepare-only     Extract archives from tools/archives/ and exit
   --with-tests       Build Wine regression-test executables (off for runtime builds)
-  --maplestory        Apply the production MapleStory compatibility stack (CX26 only;
-                      D3DMetal-neutral; MoltenVK is only needed for DXVK runs)
   --bootstrap-brew   Install project-local x86_64 Homebrew
   --install-deps     Install build dependencies via .brew-x86
   --with-vulkan      Enable Vulkan (Wine configure autodetects MoltenVK)
@@ -76,8 +74,10 @@ Options:
                      Apply the optional CX26 no-Vulkan SONAME build fallback
   --vulkan-source SRC
                      With --with-vulkan: homebrew (default) or crossover
-                     crossover: use install from build-graphics-stack.sh
+                     crossover: copy MoltenVK out of a local CrossOver.app
+                     (auto-detected; override with CROSSOVER_APP)
   --configure-only   Run configure without make/install
+  --skip-renderers   Do not stage DXMT / D3DMetal into the install tree
   --jobs N           Parallel make jobs (default: CPU count)
   --dry-run          Print commands without executing
   -h, --help         Show this help
@@ -85,10 +85,13 @@ Options:
 Vulkan examples:
   bash scripts/build-wine.sh --install-deps --without-vulkan
   bash scripts/build-wine.sh --install-deps --with-vulkan --vulkan-source homebrew
-  bash scripts/build-graphics-stack.sh --cx 26 --install-deps && \\
-    bash scripts/build-graphics-stack.sh --cx 26
   bash scripts/build-wine.sh --with-vulkan --vulkan-source crossover
   bash scripts/build-media-stack.sh --cx 26
+
+vulkan-source crossover copies libMoltenVK.dylib (x86_64) out of a local
+CrossOver.app into the graphics staging tree, then bundles it into the
+engine. Vulkan is required for the DXVK backend; this repo does not build
+MoltenVK itself.
 EOF
       exit 0
       ;;
@@ -173,7 +176,7 @@ if [[ "$INSTALL_DEPS" -eq 1 ]]; then
   BUILD_TOOL_DEPS=(autoconf bison flex pkgconf)
   # Runtime libs are copied into lib/wine/x86_64-unix and must be ≤ product floor.
   RUNTIME_DEPS=(zlib bzip2 libpng freetype gettext libffi gnutls)
-  if [[ "$MAPLESTORY" -eq 1 ]]; then
+  if [[ -d "$MEDIA_INSTALL/lib/pkgconfig" ]]; then
     BUILD_TOOL_DEPS+=(meson ninja)
     RUNTIME_DEPS+=(pcre2)
   fi
@@ -197,8 +200,7 @@ if [[ "$INSTALL_DEPS" -eq 1 ]]; then
     brew_x86_install_runtime "${RUNTIME_DEPS[@]}"
   fi
   if [[ "$VULKAN_MODE" == "with" && "$VULKAN_SOURCE" == "crossover" ]]; then
-    echo "CrossOver Vulkan: run build-graphics-stack.sh after deps (cmake/python3 installed)."
-    echo "  bash scripts/build-graphics-stack.sh --cx $CX_VERSION"
+    echo "CrossOver Vulkan: libMoltenVK.dylib is copied from ${CROSSOVER_APP:-a local CrossOver.app} into $GRAPHICS_INSTALL/lib."
   fi
 fi
 
@@ -230,15 +232,28 @@ require_moltenvk_crossover() {
   if [[ -f "$lib" ]]; then
     return 0
   fi
+  # Stage a copy out of a local CrossOver.app when one is installed. Always a
+  # real copy: the engine tree must never reference CrossOver.app at runtime.
+  if [[ -n "${CROSSOVER_MOLTENVK:-}" && -f "$CROSSOVER_MOLTENVK" ]]; then
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+      echo "+ cp $CROSSOVER_MOLTENVK $lib"
+      return 0
+    fi
+    mkdir -p "$GRAPHICS_INSTALL/lib"
+    cp "$CROSSOVER_MOLTENVK" "$lib"
+    chmod u+w "$lib"
+    echo "Staged libMoltenVK.dylib from $CROSSOVER_APP"
+    return 0
+  fi
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    echo "+ require $lib from build-graphics-stack.sh"
+    echo "+ require $lib in GRAPHICS_INSTALL"
     return 0
   fi
   echo "Missing $lib" >&2
-  echo "Install CrossOver.app MoltenVK (preferred) or build from sources:" >&2
-  echo "  bash scripts/install-crossover-app-moltenvk.sh" >&2
-  echo "  bash scripts/build-graphics-stack.sh --cx $CX_VERSION --install-deps" >&2
-  echo "  bash scripts/build-graphics-stack.sh --cx $CX_VERSION" >&2
+  echo "Install CrossOver.app (auto-detected in ~/Applications or /Applications)," >&2
+  echo "set CROSSOVER_APP to its location, or point GRAPHICS_INSTALL at a tree" >&2
+  echo "that already contains lib/libMoltenVK.dylib." >&2
+  echo "Alternative: --vulkan-source homebrew (brew install molten-vk)." >&2
   exit 1
 }
 
@@ -295,10 +310,10 @@ require_x86_dep() {
 
 ensure_bzip2_pc
 require_x86_dep freetype2
-if [[ "$MAPLESTORY" -eq 1 ]]; then
-  # RAW_AUDIO_PARSE is part of the MapleStory compatibility contract, but it
-  # must remain backend-neutral. D3DMetal builds use no MoltenVK; they still
-  # need the isolated GStreamer stack for winegstreamer.
+# Wire in the isolated GStreamer stack for winegstreamer when one has been
+# built by scripts/build-media-stack.sh. Backend-neutral: D3DMetal builds use
+# no MoltenVK but still need this for media playback.
+if [[ -d "$MEDIA_INSTALL/lib/pkgconfig" ]]; then
   PKG_PC_PATH="$MEDIA_INSTALL/lib/pkgconfig:$PKG_PC_PATH"
   export LIBRARY_PATH="$MEDIA_INSTALL/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
   for _gst_pc in gstreamer-1.0 gstreamer-base-1.0 gstreamer-audio-1.0 gstreamer-tag-1.0; do
@@ -346,6 +361,11 @@ cd "$WINE_SRC"
 
 apply_gamma_patch() {
   local patch_file="$1"
+  if [[ ! -f "$patch_file" ]]; then
+    echo "Missing patch file: $patch_file" >&2
+    echo "Remove it from the apply list in $(basename "$0") or restore the file." >&2
+    exit 1
+  fi
   if [[ "$DRY_RUN" -eq 1 ]]; then
     echo "+ patch -d $WINE_SRC -p1 < $patch_file"
     return 0
@@ -399,9 +419,6 @@ apply_gamma_patch() {
   elif [[ "$(basename "$patch_file")" == "a6-final-same-view-backing-sync.patch" ]] &&
        grep -Fq 'macdrv_finalize_window_backing_sync' "$WINE_SRC/dlls/winemac.drv/cocoa_window.m" 2>/dev/null; then
     echo "Already applied: $(basename "$patch_file") (guard detected)"
-  elif [[ "$(basename "$patch_file")" == "maplestory-cx26-message-wait-handoff.patch" ]] &&
-       grep -Fq 'MapleStoryPort: preserve one driver wait result' "$WINE_SRC/dlls/win32u/message.c" 2>/dev/null; then
-    echo "Already applied: $(basename "$patch_file") (guard detected)"
   else
     echo "Cannot apply required Wine patch: $patch_file" >&2
     exit 1
@@ -412,6 +429,9 @@ remove_obsolete_patch() {
   local patch_file="$1"
   local superseding_patch
   shift
+  # The obsolete patch may have been deleted from the repo entirely; there is
+  # then nothing to reverse out of the tree.
+  [[ -f "$patch_file" ]] || return 0
   if [[ "$DRY_RUN" -eq 1 ]]; then
     echo "+ remove obsolete patch if applied: $patch_file"
     for superseding_patch in "$@"; do
@@ -439,6 +459,9 @@ remove_obsolete_patch() {
 if [[ "$CX_VERSION" == "26" ]]; then
   PATCHES_DIR="$OGOM/patches"
   apply_gamma_patch "$PATCHES_DIR/a6-final-same-view-backing-sync.patch"
+  # CrossOver compiles dlls/win32u/vulkan.c even when configure finds neither
+  # libvulkan nor MoltenVK, leaving SONAME_LIBVULKAN undefined. The fallback
+  # define is required for any --without-vulkan build to compile.
   if [[ "$VULKAN_SONAME_FALLBACK" -eq 1 || "$VULKAN_MODE" == "without" ]]; then
     apply_gamma_patch "$PATCHES_DIR/w1-win32u-vulkan-soname.patch"
   fi
@@ -461,7 +484,13 @@ if [[ "$CX_VERSION" == "26" ]]; then
     "$PATCHES_DIR/cyder-ntdll-query-directory-object-trace.patch" \
     "$PATCHES_DIR/cyder-ntdll-qdo-optnone-NtQueryDirectoryObject.patch"
   apply_gamma_patch "$PATCHES_DIR/cyder-ntdll-qdo-optnone-NtQueryDirectoryObject.patch"
-  apply_gamma_patch "$PATCHES_DIR/maplestory-cx26-message-wait-handoff.patch"
+  # Rosetta 2 thread-stall fix: hardware barrier instead of Mach register walk.
+  apply_gamma_patch "$PATCHES_DIR/gamma-ntdll-flush-write-buffers-sync.patch"
+  # NOT applied: maplestory-cx26-message-wait-handoff.patch. Upstream Cyder
+  # applies it to every CX26 build, but on this engine it makes wait_message()
+  # return without blocking whenever Cocoa delivers mouse/window events, so the
+  # main thread spins and the game freezes on any UI or menu click. The file is
+  # kept in patches/ for reference only — do not add it back without retesting.
 fi
 
 # CrossOver tarball is not a git checkout; make_makefiles requires `git ls-files`.
@@ -479,11 +508,11 @@ cd "$WINE_SRC/build64"
 
 # Bake -mmacosx-version-min into host CFLAGS so incremental `make` without an
 # exported MACOSX_DEPLOYMENT_TARGET still cannot drift to the SDK default (15+).
-CYDER_MIN_OS_TARGET="${MACOSX_DEPLOYMENT_TARGET:-10.15}"
-CYDER_MIN_FLAG="${CYDER_MACOSX_VERSION_MIN_FLAG:--mmacosx-version-min=${CYDER_MIN_OS_TARGET}}"
-CYDER_HOST_CFLAGS="-arch x86_64 ${CFLAGS:--g -O2} ${CYDER_MIN_FLAG}"
-CYDER_HOST_OBJCFLAGS="-arch x86_64 ${OBJCFLAGS:--g -O2} ${CYDER_MIN_FLAG}"
-CYDER_HOST_LDFLAGS="-arch x86_64 ${LDFLAGS:-} ${CYDER_MIN_FLAG}"
+GAMMA_MIN_OS_TARGET="${MACOSX_DEPLOYMENT_TARGET:-10.15}"
+GAMMA_MIN_FLAG="${GAMMA_MACOSX_VERSION_MIN_FLAG:-${CYDER_MACOSX_VERSION_MIN_FLAG:--mmacosx-version-min=${GAMMA_MIN_OS_TARGET}}}"
+GAMMA_HOST_CFLAGS="-arch x86_64 ${CFLAGS:--g -O2} ${GAMMA_MIN_FLAG}"
+GAMMA_HOST_OBJCFLAGS="-arch x86_64 ${OBJCFLAGS:--g -O2} ${GAMMA_MIN_FLAG}"
+GAMMA_HOST_LDFLAGS="-arch x86_64 ${LDFLAGS:-} ${GAMMA_MIN_FLAG}"
 
 CONFIGURE_CMD=(
   arch -x86_64 env
@@ -492,10 +521,10 @@ CONFIGURE_CMD=(
   PKG_CONFIG="$HOMEBREW_PREFIX/bin/pkg-config"
   PKG_CONFIG_PATH="$VULKAN_PKG_PC_PATH"
   LIBRARY_PATH="${LIBRARY_PATH:-}"
-  MACOSX_DEPLOYMENT_TARGET="$CYDER_MIN_OS_TARGET"
-  CFLAGS="$CYDER_HOST_CFLAGS"
-  OBJCFLAGS="$CYDER_HOST_OBJCFLAGS"
-  LDFLAGS="$CYDER_HOST_LDFLAGS"
+  MACOSX_DEPLOYMENT_TARGET="$GAMMA_MIN_OS_TARGET"
+  CFLAGS="$GAMMA_HOST_CFLAGS"
+  OBJCFLAGS="$GAMMA_HOST_OBJCFLAGS"
+  LDFLAGS="$GAMMA_HOST_LDFLAGS"
   ../configure
   -C
   --enable-win64
@@ -516,24 +545,24 @@ for arg in "${CONFIGURE_CMD[@]}"; do
   printf '%q ' "$arg"
 done
 printf '\n'
-echo "host minOS: MACOSX_DEPLOYMENT_TARGET=$CYDER_MIN_OS_TARGET ($CYDER_MIN_FLAG)"
+echo "host minOS: MACOSX_DEPLOYMENT_TARGET=$GAMMA_MIN_OS_TARGET ($GAMMA_MIN_FLAG)"
 
 run "${CONFIGURE_CMD[@]}"
 
 if [[ "$CONFIGURE_ONLY" -eq 0 ]]; then
   run arch -x86_64 env PATH="$BUILD_PATH" PKG_CONFIG_PATH="$VULKAN_PKG_PC_PATH" \
-    LIBRARY_PATH="${LIBRARY_PATH:-}" MACOSX_DEPLOYMENT_TARGET="$CYDER_MIN_OS_TARGET" \
-    CFLAGS="$CYDER_HOST_CFLAGS" OBJCFLAGS="$CYDER_HOST_OBJCFLAGS" LDFLAGS="$CYDER_HOST_LDFLAGS" \
+    LIBRARY_PATH="${LIBRARY_PATH:-}" MACOSX_DEPLOYMENT_TARGET="$GAMMA_MIN_OS_TARGET" \
+    CFLAGS="$GAMMA_HOST_CFLAGS" OBJCFLAGS="$GAMMA_HOST_OBJCFLAGS" LDFLAGS="$GAMMA_HOST_LDFLAGS" \
     make -j"$JOBS"
   run arch -x86_64 env PATH="$BUILD_PATH" PKG_CONFIG_PATH="$VULKAN_PKG_PC_PATH" \
-    LIBRARY_PATH="${LIBRARY_PATH:-}" MACOSX_DEPLOYMENT_TARGET="$CYDER_MIN_OS_TARGET" \
-    CFLAGS="$CYDER_HOST_CFLAGS" OBJCFLAGS="$CYDER_HOST_OBJCFLAGS" LDFLAGS="$CYDER_HOST_LDFLAGS" \
+    LIBRARY_PATH="${LIBRARY_PATH:-}" MACOSX_DEPLOYMENT_TARGET="$GAMMA_MIN_OS_TARGET" \
+    CFLAGS="$GAMMA_HOST_CFLAGS" OBJCFLAGS="$GAMMA_HOST_OBJCFLAGS" LDFLAGS="$GAMMA_HOST_LDFLAGS" \
     make install
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    echo "+ $SCRIPT_DIR/build-cyder-cxcompatdb.sh"
+    echo "+ $SCRIPT_DIR/build-cxcompatdb.sh"
   else
     WINE_SRC="$WINE_SRC" WINE_INSTALL="$WINE_INSTALL" \
-      "$SCRIPT_DIR/build-cyder-cxcompatdb.sh"
+      "$SCRIPT_DIR/build-cxcompatdb.sh"
   fi
   if [[ "$DRY_RUN" -eq 1 ]]; then
     echo "+ GRAPHICS_INSTALL=${GRAPHICS_INSTALL:-} VULKAN_MODE=$VULKAN_MODE $SCRIPT_DIR/bundle-wine-dylibs.sh"
@@ -542,9 +571,20 @@ if [[ "$CONFIGURE_ONLY" -eq 0 ]]; then
       VULKAN_MODE="$VULKAN_MODE" VULKAN_SOURCE="$VULKAN_SOURCE" \
       "$SCRIPT_DIR/bundle-wine-dylibs.sh" "$WINE_INSTALL"
   fi
-  ENGINE_VERSION_LABEL="$(head -n 1 "$SCRIPT_DIR/../../config/engine-version.txt" 2>/dev/null || true)"
+  if [[ "$SKIP_RENDERERS" -eq 1 ]]; then
+    echo "Skipping renderer staging (--skip-renderers)"
+  elif [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "+ $SCRIPT_DIR/install-renderers.sh $WINE_INSTALL"
+  else
+    "$SCRIPT_DIR/install-renderers.sh" "$WINE_INSTALL"
+  fi
+  ENGINE_VERSION_LABEL="$(head -n 1 "$SCRIPT_DIR/../config/engine-version.txt" 2>/dev/null || true)"
   if [[ -n "$ENGINE_VERSION_LABEL" ]]; then
-    printf '%s\n' "$ENGINE_VERSION_LABEL" >"$WINE_INSTALL/version"
-    echo "Wrote engine version: $WINE_INSTALL/version"
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+      echo "+ write engine version $ENGINE_VERSION_LABEL to $WINE_INSTALL/version"
+    else
+      printf '%s\n' "$ENGINE_VERSION_LABEL" >"$WINE_INSTALL/version"
+      echo "Wrote engine version: $WINE_INSTALL/version"
+    fi
   fi
 fi

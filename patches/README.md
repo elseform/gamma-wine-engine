@@ -2,7 +2,9 @@
 
 This document details the active patch set applied to CrossOver 26.3.0 / Wine 11.0 in `gamma-wine-engine`.
 
-All patches are applied automatically in sequence by `scripts/build-wine.sh`.
+14 patches are applied automatically in sequence by `scripts/build-wine.sh`,
+which fails loudly if a listed patch file is missing. The same list is recorded
+in `config/engine-release.json` and lands in the release manifest.
 
 ---
 
@@ -25,6 +27,12 @@ All patches are applied automatically in sequence by `scripts/build-wine.sh`.
 | 13 | `cyder-ntdll-qdo-optnone-NtQueryDirectoryObject.patch` | `ntdll` | Disables aggressive Clang optimization on `NtQueryDirectoryObject` that caused miscompilation. |
 | 14 | `gamma-ntdll-flush-write-buffers-sync.patch` | `ntdll` | Replaces expensive Mach thread register iteration in `NtFlushProcessWriteBuffers` with hardware memory barrier (`__sync_synchronize()`), preventing Rosetta 2 thread deadlocks. |
 
+> Patch 14 was regenerated against pristine CX 26.3.0 sources in August 2026: the
+> committed file had a corrupt hunk header (`@@ -7061,26 +7061,8 @@` for a 30/10
+> hunk) and could not apply at all, and `build-wine.sh` never referenced it. Both
+> are fixed — verified to apply to pristine sources and to be detected as already
+> applied on a patched tree.
+
 ---
 
 ## Patches & Fixes That Resolved the Game Hanging
@@ -39,10 +47,42 @@ All patches are applied automatically in sequence by `scripts/build-wine.sh`.
 
 ---
 
-## Dropped / Deleted Patches
+## Present but not in the numbered list
 
-All obsolete, unused, and game-specific hack patches have been removed from the repository:
-- `patches/obsolete/*`: Deleted obsolete stack walk guard.
-- `patches/cyder-ntdll-query-directory-object-trace.patch`: Deleted debug-only trace patch.
-- `patches/w1-win32u-vulkan-soname.patch`: Deleted unused fallback patch.
-- `patches/maplestory-cx26-*`: Deleted all ~20 game-specific hacks.
+These four files were deleted at one point and have been restored from
+`cyder-wine-engine`, because `build-wine.sh` still references them:
+
+| File | Role |
+|---|---|
+| `w1-win32u-vulkan-soname.patch` | **Applied for every `--without-vulkan` build.** CrossOver compiles `dlls/win32u/vulkan.c` even when configure finds no libvulkan/MoltenVK, leaving `SONAME_LIBVULKAN` undefined; this supplies the fallback define so the build compiles at all. Also selectable via `--vulkan-soname-fallback`. |
+| `cyder-ntdll-query-directory-object-trace.patch` | Not applied. Debug-only trace, superseded by `cyder-ntdll-qdo-optnone-NtQueryDirectoryObject.patch`; kept so `remove_obsolete_patch()` can reverse it out of a tree that still carries it. |
+| `obsolete/cyder-ntdll-frame-walk-guard.patch` | Not applied. Same role — reversed out in favour of the page-fault guard. |
+| *(none — see below)* | `maplestory-cx26-message-wait-handoff.patch` is **deleted, not merely unapplied.** |
+
+### Why `maplestory-cx26-message-wait-handoff.patch` is gone
+
+Upstream Cyder applies it to every CX26 build (its comment claims it is "not a
+MapleStory-only patch"). On this engine it is the cause of the game freeze: it
+makes `wait_message()` skip `NtWaitForMultipleObjects` whenever
+`process_driver_events()` returned `TRUE`, and on macOS Cocoa mouse-move and
+window events make that happen constantly, so the main thread spins instead of
+blocking and deadlocks on any UI or menu click. Reverting it is what fixed the
+click hangs.
+
+It is game-specific to MapleStory and this engine does not need it, so the file
+is not kept in the repo at all. If some future change appears to want it, copy
+it from `cyder-wine-engine/patches/` and retest UI/menu clicking specifically
+before trusting it.
+
+`build-wine.sh` previously tried to apply this patch and `w1` after both were
+deleted from the repo, which aborted any build from a clean source tree.
+`apply_gamma_patch()` now fails loudly on a missing file, and
+`remove_obsolete_patch()` treats a missing obsolete patch as "nothing to
+reverse".
+
+### Filenames
+
+11 patches keep their `cyder-` prefix from the upstream pipeline this repo was
+forked from. They are referenced by exact filename in `build-wine.sh` and
+`config/engine-release.json`; the names are provenance, not branding, and are
+deliberately left alone by the GAMMA rename.
