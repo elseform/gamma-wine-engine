@@ -49,6 +49,8 @@
 Builds a fully self-contained `.app` from an engine `.tar.xz`: extracts the engine, bootstraps a
 prefix, installs winetricks verbs, and writes the bundle metadata and launcher. Prompts for the
 artifact path, app name and location, game root, and executable. Standalone — calls no other script.
+The generated `app.env` also exposes `EXE_PATH` and `EXE_RUN_DIR`, so the target can be changed
+later without rebuilding the app.
 ```bash
 bash scripts/interactive-setup.sh
 ```

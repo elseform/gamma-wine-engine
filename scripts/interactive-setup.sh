@@ -246,6 +246,12 @@ export GAMMA_GRAPHICS_BACKEND=$GRAPHICS_BACKEND
 # ---------------------------------------------------------------------------
 # General
 # ---------------------------------------------------------------------------
+# Windows path to the executable launched by Wine. If you point this at an
+# executable in another directory, update EXE_RUN_DIR below as well so local
+# DLL and configuration lookups still work.
+export EXE_PATH='$EXE_WIN_PATH'
+export EXE_RUN_DIR='$EXE_RUN_DIR'
+
 export MTL_HUD_ENABLED=1          # Metal performance HUD (both backends)
 export WINEMSYNC=1                # Darwin Mach semaphore sync
 export WINEESYNC=1
@@ -388,9 +394,10 @@ case "\$GAMMA_GRAPHICS_BACKEND" in
     ;;
 esac
 
-EXE_PATH="$EXE_WIN_PATH"
+EXE_PATH="\${EXE_PATH:-$EXE_WIN_PATH}"
+EXE_RUN_DIR="\${EXE_RUN_DIR:-$EXE_RUN_DIR}"
 
-cd "$EXE_RUN_DIR"
+cd "\$EXE_RUN_DIR"
 
 # Bring window to frontmost focus for DirectInput capture
 (

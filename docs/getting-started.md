@@ -105,6 +105,16 @@ export DXMT_CONFIG="d3d11.metalSpatialUpscaleFactor=1.5;d3d11.preferredMaxFrameR
 `DEFAULT_GAME_ARGS` sets the arguments used for Finder/Dock launches; anything
 passed on the command line overrides it.
 
+The target executable is configurable there too. `EXE_PATH` is the Windows
+path passed to Wine. When switching to an executable in another directory,
+change `EXE_RUN_DIR` to the corresponding macOS directory so the game can find
+its adjacent DLLs and configuration files:
+
+```bash
+export EXE_PATH='G:\3dss5\bin\AnomalyDX10AVX.exe'
+export EXE_RUN_DIR="$HOME/gamma/3dss5/bin"
+```
+
 ## 4. Troubleshooting
 
 **Which backend actually loaded?** Launch from a terminal. `cxcompatdb` prints
