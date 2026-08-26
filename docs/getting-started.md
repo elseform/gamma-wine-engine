@@ -122,6 +122,12 @@ back is deliberate: a bad backend choice degrades instead of failing to start.
 **32-bit process fell back to wined3d.** D3DMetal ships no 32-bit payload. Use
 `dxmt`, or `default` to let the engine pick per process.
 
+**DXMT crashes during startup.** Known and unresolved — the game dies just
+after material loading with a `FATAL ERROR / invalid_parameter_handler` dialog.
+Use `d3dmetal` for now. Details, what has been ruled out, and how to pick the
+investigation back up are in
+[renderers.md](renderers.md#known-issue-dxmt-crashes-during-startup).
+
 **`dxvk` never activates.** Expected right now — see
 [renderers.md](renderers.md#dxvk-staged-but-not-active). The engine has to be
 rebuilt with Vulkan first.
