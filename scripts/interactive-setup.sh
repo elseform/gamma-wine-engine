@@ -254,7 +254,7 @@ export EXE_RUN_DIR='$EXE_RUN_DIR'
 
 export MTL_HUD_ENABLED=1          # Metal performance HUD (both backends)
 export WINEMSYNC=1                # Darwin Mach semaphore sync
-export WINEESYNC=1
+export WINEESYNC=0
 export ROSETTA_ADVERTISE_AVX=1
 export WINEDEBUG="-all"           # fixme-all for a middle ground
 
@@ -272,8 +272,8 @@ export DEFAULT_GAME_ARGS=""
 # The launcher already points D3DMetal at the in-bundle engine, so
 # CX_D3DMETALPATH and CX_APPLEGPTK_LIBD3DSHARED_PATH do not belong here.
 #
-#export D3DM_ENABLE_METALFX=1     # MetalFX upscaling.            0 | 1
-#export D3DM_MAX_FPS=120          # Frame cap.                    integer fps
+export D3DM_ENABLE_METALFX=0     # MetalFX upscaling.            0 | 1
+export D3DM_MAX_FPS=60          # Frame cap.                    integer fps
 #export D3DM_SHOW_HUD_STATS=1     # D3DMetal's own stats overlay. 0 | 1
 #                                 #   (separate from MTL_HUD_ENABLED above)
 #export D3DM_LOD_BIAS=-0.5        # Texture LOD bias. Negative = sharper and
@@ -281,12 +281,12 @@ export DEFAULT_GAME_ARGS=""
 #export D3DM_MIN_LOD_CLAMP=0      # Floor for texture LOD.        float
 #export D3DM_SUPPORT_DXR=1        # Advertise DXR raytracing.     0 | 1
 #export D3DM_MTL4=1               # Use the Metal 4 backend path. 0 | 1
-#export D3DM_POSITION_INVARIANCE=1 # Force invariant vertex positions across
+export D3DM_POSITION_INVARIANCE=1 # Force invariant vertex positions across
 #                                 #   passes; fixes z-fighting and shadow
 #                                 #   shimmer in some titles.     0 | 1
-#export D3DM_SAMPLE_NAN_TO_ZERO=1 # Clamp NaN texels to 0; fixes black or
+export D3DM_SAMPLE_NAN_TO_ZERO=1 # Clamp NaN texels to 0; fixes black or
 #                                 #   flickering textures.        0 | 1
-#export D3DM_FLUSH_POS_INF_TO_NAN=1 # Related float-edge-case fixup. 0 | 1
+export D3DM_FLUSH_POS_INF_TO_NAN=1 # Related float-edge-case fixup. 0 | 1
 #export D3DM_IGNORE_D3D11_RENDER_BARRIERS=1
 #                                 # Skip D3D11 render barriers. Faster, can
 #                                 #   corrupt rendering.          0 | 1
