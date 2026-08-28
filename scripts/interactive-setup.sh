@@ -100,6 +100,7 @@ fi
 echo ""
 echo "==> Step 1: Extracting Wine engine into app bundle..."
 mkdir -p "$APP_PATH/Contents/MacOS" "$APP_PATH/Contents/Resources" "$ENGINE_DIR" "$APP_SUPPORT"
+cp "$SCRIPT_DIR/Anomaly.icns" "$APP_PATH/Contents/Resources/Anomaly.icns"
 tar -xf "$ARTIFACT_PATH" -C "$ENGINE_DIR" --strip-components=1
 
 if [[ ! -x "$ENGINE_DIR/bin/wine" ]]; then
@@ -192,6 +193,8 @@ cat > "$APP_PATH/Contents/Info.plist" << EOF
 	<string>$APP_NAME</string>
 	<key>CFBundleExecutable</key>
 	<string>launcher</string>
+	<key>CFBundleIconFile</key>
+	<string>Anomaly.icns</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.gamma.wine-engine.$(echo "$APP_NAME" | tr '[:upper:] ' '[:lower:]-')</string>
 	<key>CFBundleInfoDictionaryVersion</key>
@@ -310,7 +313,7 @@ export D3DM_FLUSH_POS_INF_TO_NAN=1 # Related float-edge-case fixup. 0 | 1
 # ---------------------------------------------------------------------------
 # Names read out of the shipped winemetal.so and DXMT d3d11.dll.
 #
-#export DXMT_METALFX_SPATIAL_SWAPCHAIN=1
+export DXMT_METALFX_SPATIAL_SWAPCHAIN=0
 #                                 # MetalFX spatial upscaling on the
 #                                 #   swapchain.                  0 | 1
 #                                 #   Pair with d3d11.metalSpatialUpscaleFactor
@@ -326,7 +329,7 @@ export D3DM_FLUSH_POS_INF_TO_NAN=1 # Related float-edge-case fixup. 0 | 1
 #
 # Fine-grained options. Either a semicolon-separated list here, or point
 # DXMT_CONFIG_FILE at a dxmt.conf holding one key=value per line.
-#export DXMT_CONFIG="d3d11.metalSpatialUpscaleFactor=1.5;d3d11.preferredMaxFrameRate=120"
+#export DXMT_CONFIG="d3d11.metalSpatialUpscaleFactor=1.0;d3d11.preferredMaxFrameRate=60;d3d11.sampleNaNToZero=true;dxgi.handleAltTab=true;d3d11.defuseFma=true;d3d11.maxFeatureLevel=11_1"
 #export DXMT_CONFIG_FILE=
 #
 # Recognized keys in this build:
@@ -425,6 +428,9 @@ if codesign --force --sign - --timestamp=none "$APP_PATH" 2>/dev/null; then
 else
   echo "  Warning: could not sign the bundle (it will still run locally)" >&2
 fi
+
+echo "==> Step 5: Registering with Launch Services..."
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP_PATH" 2>/dev/null || true
 
 echo ""
 echo "=========================================================="
