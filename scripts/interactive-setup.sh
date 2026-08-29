@@ -153,28 +153,30 @@ wine_reg "HKEY_CURRENT_USER\Software\Wine\Mac Driver" /v AllowSetGamma /t REG_DW
 for dll in d3d11 dxgi d3d12; do
   wine_reg "HKEY_CURRENT_USER\Software\Wine\DllOverrides" /v "$dll" /t REG_SZ /d builtin /f
 done
-for dll in "*d3dcompiler_43" "*d3dcompiler_47" "*d3dx9_43" "*d3dx10_43" "*d3dx11_43"; do
+for dll in "*d3dcompiler_47" "*d3dx9_43" "*d3dx10_43" "*d3dx11_43" \
+           "*concrt140" "*msvcp140" "*msvcp140_1" "*msvcp140_2" \
+           "*msvcp140_atomic_wait" "*msvcp140_codecvt_ids" \
+           "*vcamp140" "*vccorlib140" "*vcomp140" "*vcruntime140" "*vcruntime140_1"; do
   wine_reg "HKEY_CURRENT_USER\Software\Wine\DllOverrides" /v "$dll" /t REG_SZ /d "native,builtin" /f
 done
 wine_reg "HKEY_CURRENT_USER\Software\Wine\DllOverrides" /v "winemenubuilder.exe" /t REG_SZ /d "" /f
 
-echo "==> Step 2.4: Installing winetricks packages..."
-WINETRICKS_BIN="/tmp/winetricks"
-if ! command -v winetricks >/dev/null 2>&1 && [[ ! -x "$WINETRICKS_BIN" ]]; then
-  curl -fsSL https://raw.githubusercontent.com/Winetricks/winetricks/master/src/winetricks -o "$WINETRICKS_BIN"
-  chmod +x "$WINETRICKS_BIN"
+echo "==> Step 2.4: Installing vendored DirectX/VC++ redistributables..."
+REDIST_DIR="$ENGINE_DIR/redist"
+[[ -d "$REDIST_DIR" ]] || REDIST_DIR="$REPO_ROOT/runtime/redist"
+SYS64="$WINEPREFIX/drive_c/windows/system32"
+SYS32="$WINEPREFIX/drive_c/windows/syswow64"
+if [[ -d "$REDIST_DIR/x86_64-windows" ]]; then
+  cp -f "$REDIST_DIR/x86_64-windows/"*.dll "$SYS64/"
 fi
-WINETRICKS_CMD="$(command -v winetricks || echo "$WINETRICKS_BIN")"
+if [[ -d "$REDIST_DIR/i386-windows" && -d "$SYS32" ]]; then
+  cp -f "$REDIST_DIR/i386-windows/"*.dll "$SYS32/"
+fi
 
-WINE="$ENGINE_DIR/bin/wine" WINESERVER="$ENGINE_DIR/bin/wineserver" WINEPREFIX="$WINEPREFIX" \
-  "$WINETRICKS_CMD" -q \
-    d3dx9_43 \
-    d3dx11_43 \
-    d3dcompiler_43 \
-    d3dcompiler_47 \
-    vcrun2022 \
-    win10 \
-    sound=coreaudio
+WINEPREFIX="$WINEPREFIX" arch -x86_64 "$ENGINE_DIR/bin/wine" "$ENGINE_DIR/lib/wine/x86_64-windows/winecfg.exe" -v win10
+WINEPREFIX="$WINEPREFIX" arch -x86_64 "$ENGINE_DIR/bin/wineserver" -w
+
+wine_reg "HKEY_CURRENT_USER\Software\Wine\Drivers" /v Audio /t REG_SZ /d coreaudio /f
 
 WINEPREFIX="$WINEPREFIX" arch -x86_64 "$ENGINE_DIR/bin/wineserver" -w
 

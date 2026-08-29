@@ -176,6 +176,14 @@ rsync -a --delete \
 find "$ENGINE_TREE" -name '.DS_Store' -delete 2>/dev/null || true
 gamma_write_engine_version_file "$ENGINE_TREE" "$ENGINE_VERSION_LABEL"
 
+REDIST_SRC="$OGOM/runtime/redist"
+[[ -d "$REDIST_SRC/x86_64-windows" ]] || {
+  echo "Missing vendored redist DLLs at $REDIST_SRC — see runtime/redist/README or interactive-setup.sh history." >&2
+  exit 1
+}
+echo "==> Embedding vendored DirectX/VC++ redistributables"
+rsync -a --delete "$REDIST_SRC/" "$ENGINE_TREE/redist/"
+
 bash "$SCRIPT_DIR/strip-wine-install.sh" "$ENGINE_TREE"
 # Preserve MoltenVK already in the install tree (VULKAN_SOURCE=existing only
 # seeds it when VULKAN_MODE=with; default without would orphan-delete it).

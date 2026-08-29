@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "engineId": "cx26.3-w11-gamma003",
-  "versionLabel": "CX26.3.0-W11-Gamma003",
-  "artifactBasename": "CX26W11Gamma003",
+  "engineId": "cx26.3-w11-gamma005",
+  "versionLabel": "CX26.3.0-W11-Gamma005",
+  "artifactBasename": "CX26W11Gamma005",
   "base": {
     "crossover": "26.3.0",
     "wine": "11.0"
@@ -31,7 +31,8 @@
     "gamma-ntdll-flush-write-buffers-sync.patch"
   ],
   "components": [
-    "runtime/cxcompatdb/cxcompatdb.c"
+    "runtime/cxcompatdb/cxcompatdb.c",
+    "runtime/redist"
   ],
   "notes": "gamma-wine-engine provides a standalone Wine 11.0 / CX26 engine with Apple D3DMetal (GPTK 4.0b1) and DXMT."
 }
