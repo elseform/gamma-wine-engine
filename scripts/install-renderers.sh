@@ -26,7 +26,7 @@ source "$SCRIPT_DIR/env-x86_64.sh"
 
 WINE_INSTALL="${1:-$WINE_INSTALL}"
 DXMT_SRC="${DXMT_SRC:-$REPO_ROOT/sources/dxmt}"
-GPTK_SRC="${GPTK_SRC:-$REPO_ROOT/sources/gptk4.0b1/d3dmetal}"
+GPTK_SRC="${GPTK_SRC:-$REPO_ROOT/sources/gptk40b1/d3dmetal}"
 DXVK_SRC="${DXVK_SRC:-$REPO_ROOT/sources/dxvk}"
 [[ -d "$DXVK_SRC" ]] || DXVK_SRC="${CROSSOVER_DXVK:-}"
 WINE_BUILD64="${WINE_BUILD64:-$WINE_SRC/build64}"
@@ -148,8 +148,12 @@ if [[ -d "$GPTK_SRC" ]]; then
   cp -RP "$GPTK_SRC/wine/x86_64-unix/"* "$WINE_INSTALL/lib/d3dmetal/x86_64-unix/"
   echo "  Staged D3DMetal x86_64 (no i386 payload exists upstream)"
 
-  # Compatibility symlinks for Sikarugir / CrossOver legacy paths
+  # Compatibility symlinks for Sikarugir / CrossOver legacy paths.
+  # lib/apple_gptk must not survive as a real directory from a prior run: `ln -sfn`
+  # only replaces an existing symlink in place, but drops the new link *inside* an
+  # existing real directory instead, silently breaking the legacy candidate path.
   ln -sfn ../external "$WINE_INSTALL/lib/d3dmetal/external"
+  [[ -L "$WINE_INSTALL/lib/apple_gptk" || ! -e "$WINE_INSTALL/lib/apple_gptk" ]] || rm -rf "$WINE_INSTALL/lib/apple_gptk"
   ln -sfn d3dmetal "$WINE_INSTALL/lib/apple_gptk"
   mkdir -p "$WINE_INSTALL/lib64/apple_gptk"
   ln -sfn ../../lib/d3dmetal "$WINE_INSTALL/lib64/apple_gptk/wine"

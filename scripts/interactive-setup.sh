@@ -150,9 +150,11 @@ wine_reg() {
 wine_reg "HKEY_CURRENT_USER\Software\Wine\Drivers" /v Graphics /t REG_SZ /d mac /f
 wine_reg "HKEY_CURRENT_USER\Software\Wine\Mac Driver" /v AllowSetGamma /t REG_DWORD /d 0 /f
 
-for dll in d3d11 dxgi d3d12; do
-  wine_reg "HKEY_CURRENT_USER\Software\Wine\DllOverrides" /v "$dll" /t REG_SZ /d builtin /f
-done
+# d3d11/dxgi/d3d12 deliberately get no registry DllOverrides here: cxcompatdb.so
+# activates the selected backend by prepending its directory to the DLL search
+# path at process start, not via registry overrides. Forcing these to "builtin"
+# in the registry would fight that mechanism and pin wined3d/Wine's own D3D11
+# regardless of GAMMA_GRAPHICS_BACKEND.
 for dll in "*d3dcompiler_47" "*d3dx9_43" "*d3dx10_43" "*d3dx11_43" \
            "*concrt140" "*msvcp140" "*msvcp140_1" "*msvcp140_2" \
            "*msvcp140_atomic_wait" "*msvcp140_codecvt_ids" \
