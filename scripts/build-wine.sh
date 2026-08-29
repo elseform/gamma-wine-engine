@@ -481,7 +481,7 @@ if [[ "$CX_VERSION" == "26" ]]; then
   apply_gamma_patch "$PATCHES_DIR/cyder-wineserver-pipe-end-disconnect-null-fd.patch"
   apply_gamma_patch "$PATCHES_DIR/cyder-wineserver-add-completion-guard.patch"
   remove_obsolete_patch \
-    "$PATCHES_DIR/cyder-ntdll-query-directory-object-trace.patch" \
+    "$PATCHES_DIR/obsolete/cyder-ntdll-query-directory-object-trace.patch" \
     "$PATCHES_DIR/cyder-ntdll-qdo-optnone-NtQueryDirectoryObject.patch"
   apply_gamma_patch "$PATCHES_DIR/cyder-ntdll-qdo-optnone-NtQueryDirectoryObject.patch"
   # Rosetta 2 thread-stall fix: hardware barrier instead of Mach register walk.
