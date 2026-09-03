@@ -8,8 +8,8 @@
 
 Read `../gamma-project/AGENTS.md` before work. Shared safety and cross-repository
 policy remain canonical there. This repository owns the custom Wine 11.0 /
-CrossOver 26.3.0 engine build pipeline, patches, backend packaging (D3DMetal,
-DXMT, DXVK, wined3d), and release artifacts (`dist/artifacts/*.tar.xz`).
+CrossOver 26.3.0 engine build pipeline, patches, D3DMetal/DXMT backend
+packaging, WineD3D fallback, and release artifacts (`dist/artifacts/*.tar.zst`).
 
 The engine tarball is consumed as a bundled asset by `gamma-setup-tool`; the
 `.app` this repo can also build directly (`scripts/interactive-setup.sh`) is
