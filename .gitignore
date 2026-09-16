@@ -5,6 +5,9 @@ dist/
 .brew-x86/
 reference
 
+# Local AI-assistant session metadata
+.claude-launcher/
+
 # macOS metadata
 .DS_Store
 *.swp
