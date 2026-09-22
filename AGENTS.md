@@ -7,13 +7,15 @@
 - Role: `supporting-application`
 
 Read `../gamma-project/AGENTS.md` before work. Shared safety and cross-repository
-policy remain canonical there. This repository owns the custom Wine 11.0 /
-CrossOver 26.3.0 engine build pipeline, patches, D3DMetal/DXMT backend
-packaging, WineD3D fallback, and release artifacts (`dist/artifacts/*.tar.zst`).
+policy remain canonical there. This repository owns the Wine 11.16 /
+CrossOver 26.3.0 engine build pipeline, patches, the `cxcompatdb` backend
+switcher, the Configurator, DXMT/D3DMetal packaging (no WineD3D fallback), and
+release artifacts (`dist/artifacts/*.tar.zst`). Build and lifecycle:
+`docs/building.md`; consumer interface: `docs/setup-tool-contract.md`.
 
-The engine tarball is consumed as a bundled asset by `gamma-setup-tool`, whose
-`interactive_setup.py` (lives there, not in this repo) builds the maintainer's
-own GAMMA runtime wrapper `.app` around it. `fetch-dxmt.sh` pulls a prebuilt DXMT
-CI artifact into `renderers/dxmt` — a build input, distinct from the `dxmt`
-source-authority checkout resolved via `gamma-project`'s
-`project-paths-get.py --field dxmt_root`; do not conflate the two.
+The engine archive is consumed by `gamma-setup-tool`, whose
+`interactive_setup.py` (lives there, not in this repo) builds a wrapper `.app`
+around it. `renderers/dxmt/` is a built DXMT payload from the `elseform/dxmt`
+fork, built per `gamma-project`'s `docs/engine/dxmt-build.md`; it is distinct
+from the `dxmt` source checkout resolved via `project-paths-get.py --field
+dxmt_root`. `fetch-dxmt.sh` would replace it with an upstream CI build.
